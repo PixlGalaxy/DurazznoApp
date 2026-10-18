@@ -1,0 +1,14 @@
+/Old/*
+
+# Build output
+bin/
+obj/
+/dist/
+*.user
+.vs/
+
+# Third-party tool binaries (shipped as Tools.zip, not stored in git)
+/tools/
+
+# Update signing key (private): never commit
+/crypto/

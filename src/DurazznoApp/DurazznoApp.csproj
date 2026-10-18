@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <!-- WPF for the main window, WinForms for the tray icon and its menu. -->
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <ApplicationIcon>Assets\Logos\durazzno_icon.ico</ApplicationIcon>
+    <AssemblyName>DurazznoAppDaemon</AssemblyName>
+    <!-- Shown as the process name in Task Manager. -->
+    <AssemblyTitle>DurazznoApp Daemon</AssemblyTitle>
+    <RootNamespace>Durazzno</RootNamespace>
+
+    <Version>3.0.0</Version>
+    <Product>Durazzno App</Product>
+    <Company>Galaxy Apps</Company>
+    <Copyright>Galaxy Apps</Copyright>
+
+    <!-- One self-contained .exe: no .NET or Python install needed on the target PC. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <!-- WPF and WinForms share type names (Application, Color, Point...): import them explicitly per file. -->
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+    <!-- The WPF SDK drops these from the implicit usings. -->
+    <Using Include="System.IO" />
+    <Using Include="System.Net.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\Lucide\*.svg" LogicalName="Lucide.%(Filename)" />
+    <EmbeddedResource Include="Assets\Logos\*.ico" LogicalName="Logos.%(Filename)" />
+    <EmbeddedResource Include="Assets\Plugins\*.png" LogicalName="Plugins.%(Filename)" />
+    <Resource Include="Assets\Fonts\*.otf;Assets\Fonts\*.ttf" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Svg" Version="3.4.7" />
+    <PackageReference Include="System.Management" Version="9.0.10" />
+  </ItemGroup>
+
+  <!-- DiskSpd (Microsoft, MIT) for DiskMark: embedded, extracted to %LOCALAPPDATA%\DurazznoApp\bin on first use. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\Bin\DiskSpd64.exe" LogicalName="Bin.DiskSpd64.exe" />
+  </ItemGroup>
+
+</Project>
