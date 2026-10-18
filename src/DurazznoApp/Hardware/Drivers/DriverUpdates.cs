@@ -332,7 +332,7 @@ internal static class DriverUpdates
                         default:
                             var installer = await VendorDrivers.PrepareAsync(u, work, Bytes, cancel.Token);
                             Report(new InstallProgress(u.UpdateId, "installing"));
-                            result = RunInstaller(installer);
+                            result = RunInstaller(installer, u.Source);
                             break;
                     }
                 }
@@ -445,7 +445,7 @@ internal static class DriverUpdates
     }
 
     /// <summary>Runs a maker's installer (silent when the maker allows it) and maps its exit code.</summary>
-    private static InstallResult RunInstaller(VendorInstall v)
+    private static InstallResult RunInstaller(VendorInstall v, DriverSource source)
     {
         try
         {
@@ -460,6 +460,10 @@ internal static class DriverUpdates
             {
                 0 => new InstallResult(v.UpdateId, v.Title, true, "Installed", false),
                 3010 or 1641 => new InstallResult(v.UpdateId, v.Title, true, "Installed", true),
+                // Intel graphics: Installer.exe exits 14 ("success, restart needed") and the gfx_win_*.exe bootstrapper
+                // passes it on as 1000 + code (1014; 1000 = plain success).
+                14 or 1014 when source == DriverSource.Intel => new InstallResult(v.UpdateId, v.Title, true, "Installed", true),
+                1000 when source == DriverSource.Intel => new InstallResult(v.UpdateId, v.Title, true, "Installed", false),
                 1602 or 1223 => new InstallResult(v.UpdateId, v.Title, false, "Cancelled in the installer", false),
                 var code => new InstallResult(v.UpdateId, v.Title, false, $"The installer finished with code {code}", false),
             };
