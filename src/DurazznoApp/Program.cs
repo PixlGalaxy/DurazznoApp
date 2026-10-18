@@ -54,7 +54,10 @@ internal static class Program
             return Hardware.Drivers.DriverUpdates.RunBackup(args[1]);
 
         var justUpdated = args.Contains(UpdateService.UpdatedFlag);
-        var background = justUpdated || args.Contains(BackgroundFlag);
+        // The first launch (Windows startup, the shortcut, an update) always starts in the tray. The window opens when
+        // the app is launched again while it runs (the shortcut signals the running copy), from the tray, or after
+        // APPLY UPDATE (--open, the window was open when the user clicked it).
+        var openWindow = args.Contains(UpdateService.OpenFlag);
 
         // Right after a self-update the old process may still be shutting down, so wait for it.
         using var instance = SingleInstance.TryAcquire(justUpdated ? TimeSpan.FromSeconds(20) : TimeSpan.Zero);
@@ -69,7 +72,7 @@ internal static class Program
 
         // Update before anything is shown: install a downloaded update, or fetch one quickly. Falls through on failure.
         var settings = new SettingsStore();
-        if (!justUpdated && settings.Current.AutoUpdate && StartupUpdate.TryApply(settings, open: !background))
+        if (!justUpdated && settings.Current.AutoUpdate && StartupUpdate.TryApply(settings, open: openWindow))
             return 0;
 
         // WinForms (tray icon) settings must be applied before any window exists.
@@ -98,7 +101,7 @@ internal static class Program
 
         using var controller = new AppController(settings, justUpdated);
         instance.ListenForActivation(() => controller.ShowMainWindow());
-        if (!background || args.Contains(UpdateService.OpenFlag))
+        if (openWindow)
             controller.ShowMainWindow();
 
         app.Run();
