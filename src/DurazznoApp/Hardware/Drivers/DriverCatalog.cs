@@ -118,12 +118,13 @@ internal static partial class DriverCatalog
             rows.AddRange(await Searches.GetOrAdd(query, q => SearchRowsAsync(q, gate, ct)));
 
         Version.TryParse(device.DriverVersion, out var installed);
-        // Offers published only for a newer Windows are kept (Driver Easy offers them too): many INFs install fine on
-        // older builds, and the INF's own OS decorations are checked before installing.
+        // Only offers the catalog lists for this Windows (or an older one). Ones published only for a newer release
+        // used to be offered too and checked at install time, but on Windows 10 their INFs nearly always need
+        // Windows 11, so they just showed up as updates that failed.
         var candidates = rows
             .Where(r => r.Classification.StartsWith("Drivers", StringComparison.OrdinalIgnoreCase))
             .Select(r => (Row: r, Fit: Applicability(r.Products)))
-            .Where(x => x.Fit != Fit.No)
+            .Where(x => x.Fit == Fit.ThisWindows)
             .Where(x => installed is null || x.Row.Version is null || x.Row.Version >= installed)
             .GroupBy(x => x.Row.UpdateId).Select(g => g.First())
             .OrderByDescending(x => x.Row.Version ?? new Version(0, 0))
@@ -180,7 +181,6 @@ internal static partial class DriverCatalog
             {
                 Source = DriverSource.Catalog,
                 Version = details.Version,
-                ForNewerWindows = fit == Fit.NewerWindows,
             };
             if (DriverUpdates.IsNewer(update, device))
             {

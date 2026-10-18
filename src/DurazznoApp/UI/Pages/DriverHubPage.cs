@@ -1194,8 +1194,6 @@ internal sealed class DriverHubPage : UserControl, IDisposable
             stack.Children.Add(new Border { Background = Ui.B("InfoChip"), Padding = new Thickness(12, 10, 12, 10), Margin = new Thickness(0, 14, 0, 0), Child = box });
             if (u.Interactive)
                 stack.Children.Add(Note($"{u.Provider}'s installer window opens for this driver. Follow its steps.", "Info"));
-            if (u.ForNewerWindows)
-                stack.Children.Add(Note("Microsoft lists this driver for a newer Windows release. Its INF is checked against your Windows before installing, and it is skipped if it does not support it.", "Info"));
             if (u.Source == DriverSource.Catalog && d.ClassName.Equals("MEDIA", StringComparison.OrdinalIgnoreCase))
                 stack.Children.Add(Note("Audio drivers often come as a set tuned by your PC maker (speakers, microphones). If sound breaks after updating, roll back from the restore point or Device Manager.", "Warning"));
         }

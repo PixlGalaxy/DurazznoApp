@@ -25,9 +25,6 @@ internal sealed record DriverUpdate(
     /// <summary>Driver version when the source states it (the catalog does); otherwise parsed from the title.</summary>
     public string? Version { get; init; }
 
-    /// <summary>The catalog lists it only for a newer Windows release; the INF is checked before installing.</summary>
-    public bool ForNewerWindows { get; init; }
-
     // Manufacturer installers (Intel, NVIDIA).
     public string? DownloadUrl { get; init; }
     public string? Sha1 { get; init; }
