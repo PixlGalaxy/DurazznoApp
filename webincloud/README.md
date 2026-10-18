@@ -78,9 +78,3 @@ fails its SHA-256 check, nothing is installed, and the client tries again later.
   `DurazznoAppDaemon.exe.old` (Durazzno Terminal can roll back to it), takes its place and restarts. If something
   goes wrong, the old exe is put back.
 - **Versions are only upgraded, never downgraded.** Uploading an older version does not roll clients back.
-
-## Not done yet
-
-- The server side: an upload or publish step on Webin Cloud Server, for example an API that `publish.ps1` could call
-  instead of uploading by hand.
-- Files for `durazznoapp.apps`.

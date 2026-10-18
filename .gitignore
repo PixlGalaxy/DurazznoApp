@@ -12,3 +12,6 @@ obj/
 
 # Update signing key (private): never commit
 /crypto/
+
+# Local to-do list: never commit
+/TODO.md
