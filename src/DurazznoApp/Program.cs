@@ -46,6 +46,10 @@ internal static class Program
             return Hardware.Drivers.DriverStoreCleanup.RunDelete(args[1], args[2]);
         if (args.Length >= 3 && args[0] == Hardware.Drivers.DeviceCleanup.RemoveFlag)
             return Hardware.Drivers.DeviceCleanup.RunRemove(args[1], args[2]);
+        if (args.Length >= 2 && args[0] == Startup.BootImpact.Flag)
+            return Startup.BootImpact.RunElevated(args[1]);
+        if (args.Length >= 3 && args[0] == Hardware.Storage.CleanupService.Flag)
+            return Hardware.Storage.CleanupService.RunElevated(args[1], args[2]);
         if (args.Length >= 2 && args[0] == Hardware.Drivers.DriverUpdates.BackupFlag)
             return Hardware.Drivers.DriverUpdates.RunBackup(args[1]);
 
@@ -76,7 +80,7 @@ internal static class Program
         var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         app.Resources.MergedDictionaries.Add(new ResourceDictionary
         {
-            Source = new Uri("pack://application:,,,/DurazznoAppDaemon;component/UI/Theme.xaml"),
+            Source = new Uri("pack://application:,,,/DurazznoApp;component/UI/Theme.xaml"),
         });
         app.DispatcherUnhandledException += (_, e) =>
         {

@@ -125,7 +125,7 @@ internal sealed class DriverHubPage : UserControl, IDisposable
     private static readonly DataTemplate RowTemplate = (DataTemplate)XamlReader.Parse("""
         <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                      xmlns:c="clr-namespace:Durazzno.UI.Controls;assembly=DurazznoAppDaemon">
+                      xmlns:c="clr-namespace:Durazzno.UI.Controls;assembly=DurazznoApp">
             <Grid Height="46">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="32" />
@@ -252,7 +252,7 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         header.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var titleRow = Ui.Row(Ui.IconChip(tool.Icon, accent, Imaging.Brush(tool.Accent, 0x26), 64, 30), title);
+        var titleRow = Ui.Row(Ui.IconChip(tool.Icon, accent, Imaging.Brush(tool.Accent, 0x26), 64, 52), title);
         header.Children.Add(titleRow);
         header.Children.Add(actions);
         void LayoutHeader()

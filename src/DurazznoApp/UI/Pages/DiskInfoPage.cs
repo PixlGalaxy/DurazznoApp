@@ -47,7 +47,7 @@ internal sealed class DiskInfoPage : UserControl, IDisposable
         _updated.Margin = new Thickness(0, 8, 0, 0);
 
         var header = new Grid();
-        header.Children.Add(Ui.Row(Ui.IconChip(tool.Icon, accent, Imaging.Brush(tool.Accent, 0x26), 64, 30), titleBlock));
+        header.Children.Add(Ui.Row(Ui.IconChip(tool.Icon, accent, Imaging.Brush(tool.Accent, 0x26), 64, 52), titleBlock));
         header.Children.Add(actions);
 
         Content = Ui.Stack(header, _banner, _driveTiles, _detail);
@@ -80,6 +80,8 @@ internal sealed class DiskInfoPage : UserControl, IDisposable
         {
             var previous = _selected >= 0 && _selected < _disks.Count ? _disks[_selected].Index : (int?)null;
             _disks = (await _app.Disks.ScanAsync()).Where(d => !d.IsVirtual).ToList();
+            foreach (var change in await Task.Run(() => SmartHistory.Record(_disks)))
+                _app.NotifyDiskChange(change);
             _selected = Math.Max(0, previous is null ? 0 : _disks.FindIndex(d => d.Index == previous));
             _updated.Text = $"Updated {DateTime.Now:HH:mm:ss}  ·  refreshes every 30 s";
             Render();
@@ -216,7 +218,86 @@ internal sealed class DiskInfoPage : UserControl, IDisposable
         bottom.Children.Add(InfoCard(d).At(0));
         bottom.Children.Add(AttributesCard(d).At(2, columnSpan: 3));
 
-        return Ui.Stack(top, bottom);
+        var history = HistoryCard(d);
+        history.Margin = new Thickness(0, 20, 0, 0);
+        return Ui.Stack(top, bottom, history);
+    }
+
+    /// <summary>
+    /// Temperature over the last 7 days (hourly maximum), what changed over the last 30 days, and every problem that
+    /// appeared since the history started.
+    /// </summary>
+    private static FrameworkElement HistoryCard(DiskReport d)
+    {
+        const int Hours = 7 * 24;
+        var points = SmartHistory.For(d);
+        var stack = Ui.Stack(Ui.PanelTitle("HISTORY"));
+        if (points.Count == 0)
+        {
+            var empty = Ui.Text("Durazzno saves a reading every hour while DiskInfo is open, and one at every start. The history fills in from there.", "CardHint");
+            empty.Margin = new Thickness(0, 12, 0, 0);
+            empty.TextWrapping = TextWrapping.Wrap;
+            stack.Children.Add(empty);
+            return Ui.Card(stack);
+        }
+
+        var now = DateTime.Now;
+        var samples = new double[Hours];
+        for (var i = 0; i < Hours; i++)
+        {
+            var from = now.AddHours(i - Hours);
+            var temps = points.Where(p => p.Time > from && p.Time <= from.AddHours(1) && p.TemperatureC is not null).Select(p => p.TemperatureC!.Value).ToList();
+            samples[i] = temps.Count > 0 ? temps.Max() : 0;
+        }
+        var week = points.Where(p => now - p.Time <= TimeSpan.FromDays(7) && p.TemperatureC is not null).Select(p => p.TemperatureC!.Value).ToList();
+        var chart = new BarChart { Height = 110, Capacity = Hours, BarBrush = TempBrush(d), GridBrush = Ui.B("PanelBorder"), Margin = new Thickness(0, 14, 0, 0) };
+        chart.SetSamples(samples);
+
+        var header = new Grid { Margin = new Thickness(0, 12, 0, 0) };
+        header.Children.Add(Ui.Text("TEMPERATURE  ·  LAST 7 DAYS", "CardLabel"));
+        var range = new TextBlock { Text = week.Count > 0 ? $"max {week.Max()}°C  ·  avg {week.Average():0}°C  ·  min {week.Min()}°C" : "", Style = Ui.Res<Style>("CardHint"), HorizontalAlignment = HorizontalAlignment.Right };
+        header.Children.Add(range);
+        var axis = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+        axis.Children.Add(Ui.Text("7 days ago", "CardHint"));
+        axis.Children.Add(new TextBlock { Text = "now", Style = Ui.Res<Style>("CardHint"), HorizontalAlignment = HorizontalAlignment.Right });
+
+        var left = Ui.Stack(header, chart, axis);
+
+        // Last 30 days: compare the oldest reading in the window with the newest.
+        var first = points.FirstOrDefault(p => now - p.Time <= TimeSpan.FromDays(30)) ?? points[0];
+        var last = points[^1];
+        var right = Ui.Stack(Ui.Text($"SINCE {first.Time:MMM d}".ToUpperInvariant(), "CardLabel"));
+        right.Margin = new Thickness(0, 12, 0, 0);
+        if (points.Count == 1)
+        {
+            // Only the first reading so far: say when the next one comes instead of showing zeros.
+            var started = Ui.Text($"Tracking since {first.Time:MMM d, HH:mm}. The next reading is saved around {first.Time.AddHours(1):HH:mm} "
+                + "(every hour while DiskInfo is open, and at every start).", "CardHint");
+            started.TextWrapping = TextWrapping.Wrap;
+            started.Margin = new Thickness(0, 10, 0, 0);
+            right.Children.Add(started);
+        }
+        else if (first.WrittenBytes is { } w0 && last.WrittenBytes is { } w1)
+            right.Children.Add(Metric("Written", SystemInfo.FormatBytes(Math.Max(0, w1 - w0)), null));
+        if (first.LifePercent is { } l0 && last.LifePercent is { } l1)
+            right.Children.Add(Metric("Life", l0 == l1 ? $"{l1}%" : $"{l0}% → {l1}%", null));
+        if (points.Count > 1 && first.PowerOnHours is { } h0 && last.PowerOnHours is { } h1)
+            right.Children.Add(Metric("Powered on", $"{h1 - h0:N0} h", null));
+
+        var events = SmartHistory.Events(points);
+        var problems = Ui.Text(events.Count == 0
+                ? $"No new problems since {points[0].Time:MMM d, yyyy}."
+                : string.Join(Environment.NewLine, events.Take(5).Select(e => $"{e.Time:MMM d, HH:mm}  ·  {e.Text}")),
+            "CardHint", events.Count == 0 ? Ui.B("Success") : Ui.B("Danger"));
+        problems.Margin = new Thickness(0, 14, 0, 0);
+        problems.TextWrapping = TextWrapping.Wrap;
+        right.Children.Add(problems);
+
+        var grid = Ui.Columns(3, 28);
+        grid.Children.Add(left.At(0, columnSpan: 3));
+        grid.Children.Add(right.At(4));
+        stack.Children.Add(grid);
+        return Ui.Card(stack);
     }
 
     private UIElement HealthCard(DiskReport d)

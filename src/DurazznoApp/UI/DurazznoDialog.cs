@@ -22,7 +22,8 @@ internal sealed class DurazznoDialog : Window
 
     private int _result = -1;
 
-    private DurazznoDialog(string title, string message, string icon, string tone, IReadOnlyList<string> bullets, IReadOnlyList<DialogButton> buttons)
+    private DurazznoDialog(string title, string message, string icon, string tone, IReadOnlyList<string> bullets, IReadOnlyList<DialogButton> buttons,
+        FrameworkElement? art = null)
     {
         WindowStyle = WindowStyle.None;
         AllowsTransparency = true;
@@ -35,7 +36,8 @@ internal sealed class DurazznoDialog : Window
         UseLayoutRounding = true;
 
         var toneBrush = Ui.B(tone);
-        var chip = Ui.IconChip(icon, toneBrush, new SolidColorBrush(Color.FromArgb(0x26, ((SolidColorBrush)toneBrush).Color.R,
+        // art: a custom picture in place of the icon chip (the Webin Cloud logo for server errors).
+        FrameworkElement chip = art ?? Ui.IconChip(icon, toneBrush, new SolidColorBrush(Color.FromArgb(0x26, ((SolidColorBrush)toneBrush).Color.R,
             ((SolidColorBrush)toneBrush).Color.G, ((SolidColorBrush)toneBrush).Color.B)), 44, 22);
         chip.VerticalAlignment = VerticalAlignment.Top;
 
@@ -133,9 +135,9 @@ internal sealed class DurazznoDialog : Window
 
     /// <summary>Shows the dialog and returns the index of the chosen button, or -1 if it was dismissed.</summary>
     public static int Show(Window? owner, string title, string message, string icon, string tone,
-        IReadOnlyList<DialogButton> buttons, IReadOnlyList<string>? bullets = null)
+        IReadOnlyList<DialogButton> buttons, IReadOnlyList<string>? bullets = null, FrameworkElement? art = null)
     {
-        var dialog = new DurazznoDialog(title, message, icon, tone, bullets ?? [], buttons);
+        var dialog = new DurazznoDialog(title, message, icon, tone, bullets ?? [], buttons, art);
         if (owner is { IsVisible: true } && owner.WindowState != WindowState.Minimized)
         {
             dialog.Owner = owner;

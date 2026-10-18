@@ -64,7 +64,8 @@ internal sealed class AppController : IDisposable
         _tray.Visible = true;
 
         if (justUpdated)
-            Notify($"Durazzno App updated to {AppInfo.VersionText}", "The new version is installed.", tone: NotifyTone.Success);
+            Notify($"Durazzno App updated to {AppInfo.VersionText}", WhatsNewSummary(UpdateService.NotesFor(AppInfo.VersionText)) ?? "The new version is installed.",
+                tone: NotifyTone.Success);
 
         _ = Connection.RefreshAsync();
         _ = CheckDisksAtStartupAsync();
@@ -82,6 +83,8 @@ internal sealed class AppController : IDisposable
         {
             await Task.Delay(TimeSpan.FromSeconds(45)); // let Windows finish starting first
             var disks = await Disks.ScanAsync();
+            foreach (var change in SmartHistory.Record(disks))
+                NotifyDiskChange(change);
             foreach (var d in disks.Where(d => !d.IsVirtual && d.Health is DiskHealth.Caution or DiskHealth.Bad))
             {
                 var state = d.Health == DiskHealth.Bad ? "BAD" : "CAUTION";
@@ -99,6 +102,14 @@ internal sealed class AppController : IDisposable
         {
             Log.Warn($"Startup SMART check failed: {ex.Message}");
         }
+    }
+
+    /// <summary>A disk got worse since its previous reading (SmartHistory): one DiskInfo notification.</summary>
+    public void NotifyDiskChange(SmartChange change)
+    {
+        Log.Warn($"SMART change: {change.Disk.Model}: {change.Text}");
+        Notify($"{change.Disk.Model} is getting worse", $"{change.Text}. Open DiskInfo for details and keep your backups up to date.",
+            ToolTipIcon.Warning, NotifyLogo.DiskInfo, () => ShowMainWindow("diskinfo"), change.Serious ? NotifyTone.Error : NotifyTone.Warning);
     }
 
     public SettingsStore Settings { get; }
@@ -328,6 +339,8 @@ internal sealed class AppController : IDisposable
             return;
         }
         _wasOnline = true;
+        if (manifest.App.Version == AppInfo.VersionText || manifest.IsAppNewer)
+            UpdateService.SaveNotes(manifest.App); // What's new (Settings) for this version or the next one
 
         if (!manifest.IsCurrentVersionSupported && !_unsupportedAnnounced)
         {
@@ -356,7 +369,7 @@ internal sealed class AppController : IDisposable
         else if (userInitiated || _announcedUpdate != manifest.App.Version)
         {
             _announcedUpdate = manifest.App.Version;
-            Notify("Durazzno App Update", $"A new version is available: {manifest.App.Version}",
+            Notify("Durazzno App Update", $"A new version is available: {manifest.App.Version}" + (WhatsNewSummary(manifest.App.Notes) is { } news ? $"\n{news}" : ""),
                 ToolTipIcon.Info, NotifyLogo.Durazzno, () => _ = InstallUpdateAsync());
         }
         OnStatusChanged();
@@ -430,17 +443,8 @@ internal sealed class AppController : IDisposable
         var manifest = Connection.Manifest;
         var hasInternet = state != ConnectionState.NoInternet;
 
-        var (statusIcon, statusColor, statusText) = state switch
-        {
-            ConnectionState.Checking => ("loader-circle", TrayTheme.Neutral, "Connecting…"),
-            ConnectionState.NoInternet => ("wifi-off", TrayTheme.Warning, "Offline"),
-            ConnectionState.ServerUnreachable => ("cloud-off", TrayTheme.Warning, "Server unreachable"),
-            _ when manifest is { IsCurrentVersionSupported: false } => ("shield-alert", TrayTheme.Danger, "Unsupported"),
-            _ => ("shield-check", TrayTheme.Success, "Supported"),
-        };
-        Add($"{AppInfo.Name} {AppInfo.VersionText}  ·  {statusText}", MenuIcon(statusIcon, statusColor),
-            () => ShowMainWindow(MainWindow.SettingsPage), bold: true);
-        Add("Open Durazzno App", MenuIcon("app-window", TrayTheme.Info), () => ShowMainWindow());
+        // Version and connection status live in Settings → Updates (and the tray tooltip), not in the menu.
+        Add("Open Durazzno App", MenuIcon("app-window", TrayTheme.Info), () => ShowMainWindow(), bold: true);
 
         // The connection is watched automatically (no "Retry"): the menu only offers what can be done now.
         if (IsInstalling)
@@ -453,19 +457,7 @@ internal sealed class AppController : IDisposable
         _menu.Items.Add(new ToolStripSeparator());
 
         foreach (var tool in ToolCatalog.All)
-        {
-            if (tool.External && !tool.IsInstalled)
-                continue;
-
-            var available = !tool.RequiresInternet || hasInternet;
-            Add(available ? tool.Name : $"{tool.Name}  (needs internet)", MenuIcon(tool.Icon, ColorTranslator.FromHtml(tool.Accent)), () =>
-            {
-                if (!tool.External)
-                    ShowMainWindow(tool.Id);
-                else if (Launcher.Start(tool) is { } error)
-                    Notify(tool.Name, error, ToolTipIcon.Error);
-            }, enabled: available);
-        }
+            Add(tool.Name, MenuIcon(tool.Icon, ColorTranslator.FromHtml(tool.Accent)), () => ShowMainWindow(tool.Id));
 
         Add(PowerCutsService.Name, IconFactory.Embedded("Plugins.powercuts", iconSize), () => ShowMainWindow(MainWindow.PowerCutsPage));
         if (PowerCuts.IsActive)
@@ -479,6 +471,15 @@ internal sealed class AppController : IDisposable
         Add("ItzGalaxy Website", MenuIcon("globe", TrayTheme.Info), () => Launcher.OpenUrl(AppInfo.WebsiteUrl), enabled: hasInternet);
         Add("Settings", MenuIcon("settings", TrayTheme.Neutral), () => ShowMainWindow(MainWindow.SettingsPage));
         Add("Exit", MenuIcon("power", TrayTheme.Danger), Exit);
+    }
+
+    /// <summary>Release notes trimmed for a notification (they show in full in Settings).</summary>
+    private static string? WhatsNewSummary(string? notes)
+    {
+        if (string.IsNullOrWhiteSpace(notes))
+            return null;
+        var text = string.Join(' ', notes.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return text.Length <= 180 ? text : text[..177].TrimEnd() + "…";
     }
 
     public string ConnectionDescription() => Connection.State switch

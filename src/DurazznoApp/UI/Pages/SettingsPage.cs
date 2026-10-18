@@ -14,6 +14,9 @@ internal sealed class SettingsPage : UserControl, IDisposable
     private readonly List<Action> _reload = [];
     private readonly TextBlock _connection = Value();
     private readonly TextBlock _latest = Value();
+    private readonly TextBlock _whatsNew = Value();
+    private readonly TextBlock _whatsNewLabel = Ui.Text("What's new", "CardLabel");
+    private readonly Grid _whatsNewRow;
     private readonly TextBlock _checkResult = new() { FontSize = 13.5, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(18, 0, 0, 0), TextWrapping = TextWrapping.Wrap };
     private readonly Button _check;
     private readonly Button _install;
@@ -55,6 +58,7 @@ internal sealed class SettingsPage : UserControl, IDisposable
             SettingRow("Installed", Value($"Durazzno App {AppInfo.VersionText}")),
             SettingRow("Latest", _latest),
             SettingRow("Connection", ServerStatus()),
+            _whatsNewRow = NotesRow(),
             buttons);
 
         var openData = new Button { Content = "OPEN DATA FOLDER", Style = Ui.Res<Style>("SecondaryButton") };
@@ -162,6 +166,13 @@ internal sealed class SettingsPage : UserControl, IDisposable
             : m.IsCurrentVersionSupported ? $"{m.App.Version}  (up to date)"
             : $"{m.App.Version}  (this version is no longer supported)";
 
+        // What's new: the next version's notes when one is available, otherwise the installed version's.
+        var notes = m is { IsAppNewer: true } ? m.App.Notes
+            : Updates.UpdateService.NotesFor(AppInfo.VersionText) ?? (m?.App.Version == AppInfo.VersionText ? m.App.Notes : null);
+        _whatsNew.Text = notes?.Trim() ?? "";
+        _whatsNewLabel.Text = m is { IsAppNewer: true } ? $"New in {m.App.Version}" : "What's new";
+        _whatsNewRow.Visibility = string.IsNullOrWhiteSpace(notes) ? Visibility.Collapsed : Visibility.Visible;
+
         _check.IsEnabled = !_app.IsInstalling;
         _install.IsEnabled = !_app.IsInstalling && m is { HasUpdate: true };
     }
@@ -241,6 +252,18 @@ internal sealed class SettingsPage : UserControl, IDisposable
         });
         row.Children.Add(_connection);
         return row;
+    }
+
+    private Grid NotesRow()
+    {
+        var grid = new Grid { Margin = new Thickness(0, 18, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition());
+        _whatsNewLabel.Margin = new Thickness(0, 4, 0, 0);
+        _whatsNew.TextWrapping = TextWrapping.Wrap;
+        grid.Children.Add(_whatsNewLabel);
+        grid.Children.Add(_whatsNew.At(1));
+        return grid;
     }
 
     private static TextBlock Value(string text = "")

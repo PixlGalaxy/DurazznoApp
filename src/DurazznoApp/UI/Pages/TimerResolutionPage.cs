@@ -43,7 +43,7 @@ internal sealed class TimerResolutionPage : UserControl, IDisposable
         var title = Ui.Stack(Ui.Text(tool.Name, "PageTitle"), Ui.Text(tool.Tagline, "PageSubtitle"));
         title.Margin = new Thickness(20, 0, 0, 0);
         title.VerticalAlignment = VerticalAlignment.Center;
-        var header = Ui.Row(Ui.IconChip(tool.Icon, _accent, Imaging.Brush(tool.Accent, 0x26), 64, 30), title);
+        var header = Ui.Row(Ui.IconChip(tool.Icon, _accent, Imaging.Brush(tool.Accent, 0x26), 64, 52), title);
 
         // Current resolution ────────────────────────────────────────
         _current = new TextBlock { FontFamily = Ui.Res<FontFamily>("HeadingFont"), FontWeight = FontWeights.Bold, FontSize = 72, Foreground = _accent, Margin = new Thickness(0, -2, 0, -6) };

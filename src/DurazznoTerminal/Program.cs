@@ -35,11 +35,10 @@
 //   ⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣇⠀⠀⠀
 //   ⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠀⠀
 //
-// Recovery console for Durazzno App. It is a separate native exe on purpose: when DurazznoAppDaemon.exe fails to
+// Recovery console for Durazzno App. It is a separate native exe on purpose: when DurazznoApp.exe fails to
 // start (a bad update, broken settings), this still runs and can repair, roll back or reset it.
 
 using System.Diagnostics;
-using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -51,21 +50,24 @@ namespace Durazzno.Terminal;
 internal static class Program
 {
     private const string Version = "2.0.0";
-    private const string AppExeName = "DurazznoAppDaemon.exe";
-    private const string ProcessName = "DurazznoAppDaemon";
+    private const string AppExeName = "DurazznoApp.exe";
+    private const string ProcessName = "DurazznoApp";
+    private const string LegacyExeName = "DurazznoAppDaemon.exe"; // before 3.0.1
+    private const string LegacyProcessName = "DurazznoAppDaemon";
 
     // Same public key as the app (Updates/UpdateSignature.cs): manifests must carry a valid manifest.json.sig.
     private const string UpdatePublicKey =
         "<RSAKeyValue><Modulus>yX69DyGX/yX8Eu/gNgrVTOsQQYjn6ppNo2h4cOiRsBHcJ6jZ65p466r8Y8izMX3i4/7PtfNqjYq3TS+UlPAYkKvMNa8jODRfw55TP9GRyy2apMXJp1yjiB9wX9xfOUHrPhNAbpfOE5SAiW8lDP5aBujH3v18bkMwKUtDcP3htB/jlTLAx1pqIe1NRbpu/3TUFqytO/KuH1dRY2xvdG3QdNbjdEo3IlmgJqYqcJ1Yz0t82GAck9qwczUsxc1Mj1DDwdSgZ4IGbAitovzCsj9rpa9mh7tuIe6cNYtZ3clOTVj1LME2Rfa/rS86r8SLqgtnyjNTyAEa+pv9EqdLZTuOWZqUlsfdUVCpXhA9X7BXjeWLedT8Y67BXXknQV8HlX1no5ADXLs4LHklX1KlYK0QiXI8F5WjAOvkdsFBcrmkYtAOk1jC4RV1+lMXT37EqfxWlvMTqtlbP7iCwDzoxW7urgA1dMWqOP5lNKRr7hueEbICUQILhtD+5DBixajaks5R</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>";
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string RunValue = "DurazznoApp Daemon";
-    private const string ToolsVersionFile = "tools-version.txt";
-    private static readonly string[] ToolsUserData = ["DiskInfo.ini", "DiskMark32.ini", "Smart"];
+    private const string RunValue = "Durazzno App";
+    private const string LegacyRunValue = "DurazznoApp Daemon";
 
     private static readonly string AppDir = AppContext.BaseDirectory;
-    private static readonly string AppExe = Path.Combine(AppDir, AppExeName);
+    // An install from before 3.0.1 still has DurazznoAppDaemon.exe until it updates.
+    private static readonly string AppExe = !File.Exists(Path.Combine(AppDir, AppExeName)) && File.Exists(Path.Combine(AppDir, LegacyExeName))
+        ? Path.Combine(AppDir, LegacyExeName)
+        : Path.Combine(AppDir, AppExeName);
     private static readonly string OldExe = AppExe + ".old";
-    private static readonly string ToolsDir = Path.Combine(AppDir, "Tools");
     private static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DurazznoApp");
     private static readonly string SettingsFile = Path.Combine(DataDir, "settings.json");
     private static readonly string LogFile = Path.Combine(DataDir, "logs", "durazzno.log");
@@ -143,7 +145,7 @@ internal static class Program
         Add("start", "start", "Starts Durazzno App.", _ => { StartApp(); return Task.CompletedTask; });
         Add("stop", "stop", "Closes Durazzno App (also a frozen one).", _ => { StopApp(); return Task.CompletedTask; });
         Add("restart", "restart", "Closes and starts Durazzno App again.", _ => { StopApp(); StartApp(); return Task.CompletedTask; });
-        Add("repair", "repair", "Downloads and reinstalls the latest Durazzno App and its tools (checks SHA-256).", _ => RepairAsync());
+        Add("repair", "repair", "Downloads and reinstalls the latest Durazzno App (checks the signature and SHA-256).", _ => RepairAsync());
         Add("rollback", "rollback", "Goes back to the version installed before the last update.", _ => { Rollback(); return Task.CompletedTask; });
         Add("reset", "reset", "Resets Durazzno App settings to their defaults (keeps a backup).", _ => { Reset(); return Task.CompletedTask; });
         Add("logs", "logs [lines]", "Shows the end of the Durazzno App log (default 30 lines).", a => { Logs(a); return Task.CompletedTask; });
@@ -162,7 +164,7 @@ internal static class Program
         Line();
         Field("Terminal", $"Durazzno Terminal {Version}");
         Field("App", File.Exists(AppExe) ? $"Durazzno App {FileVersionInfo.GetVersionInfo(AppExe).ProductVersion?.Split('+')[0]}" : "not found next to the terminal");
-        Field("Running", Process.GetProcessesByName(ProcessName).Length > 0 ? "yes" : "no");
+        Field("Running", AppProcesses().Length > 0 ? "yes" : "no");
         Field("Previous version", File.Exists(OldExe) ? $"{FileVersionInfo.GetVersionInfo(OldExe).ProductVersion?.Split('+')[0]} (rollback available)" : "none");
         Field("Update server", ManifestUri().ToString());
         Field("Start with Windows", StartupEnabled() ? "on" : "off");
@@ -180,9 +182,12 @@ internal static class Program
         Say("Durazzno App started.", ConsoleColor.Green);
     }
 
+    private static Process[] AppProcesses() =>
+        [.. Process.GetProcessesByName(ProcessName), .. Process.GetProcessesByName(LegacyProcessName)];
+
     private static void StopApp()
     {
-        var processes = Process.GetProcessesByName(ProcessName);
+        var processes = AppProcesses();
         if (processes.Length == 0)
         {
             Say("Durazzno App is not running.", ConsoleColor.Gray);
@@ -211,98 +216,14 @@ internal static class Program
         var newExe = AppExe + ".new";
         await DownloadVerifiedAsync(Resolve(manifest, app), (string?)app["sha256"], newExe, $"Durazzno App {version}");
 
-        string? zip = null;
-        if (manifest["tools"] is { } tools)
-        {
-            zip = Path.Combine(Path.GetTempPath(), $"DurazznoTools-{Guid.NewGuid():N}.zip");
-            await DownloadVerifiedAsync(Resolve(manifest, tools), (string?)tools["sha256"], zip, "Tools");
-        }
-
         StopApp();
         if (File.Exists(AppExe))
             File.Move(AppExe, OldExe, overwrite: true);
         File.Move(newExe, AppExe);
         Say($"Installed Durazzno App {version}. The previous exe is kept for rollback.", ConsoleColor.Green);
 
-        if (zip is not null)
-        {
-            try
-            {
-                ReplaceTools(zip, (string?)manifest["tools"]!["version"] ?? "");
-                Say("Tools reinstalled.", ConsoleColor.Green);
-            }
-            finally
-            {
-                File.Delete(zip);
-            }
-        }
-
         StartApp();
         Line();
-    }
-
-    private static void ReplaceTools(string zip, string version)
-    {
-        var staging = ToolsDir + ".new";
-        var old = ToolsDir + ".old";
-        if (!Directory.Exists(ToolsDir) && Directory.Exists(old))
-            Directory.Move(old, ToolsDir); // an earlier swap stopped halfway
-        if (Directory.Exists(staging))
-            Directory.Delete(staging, true);
-        ZipFile.ExtractToDirectory(zip, staging);
-        File.WriteAllText(Path.Combine(staging, ToolsVersionFile), version);
-
-        if (Directory.Exists(ToolsDir))
-        {
-            foreach (var relative in ToolsUserData)
-            {
-                var source = Path.Combine(ToolsDir, relative);
-                var target = Path.Combine(staging, relative);
-                if (File.Exists(source))
-                    File.Copy(source, target, overwrite: true);
-                else if (Directory.Exists(source))
-                    foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-                    {
-                        var dest = Path.Combine(target, Path.GetRelativePath(source, file));
-                        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                        File.Copy(file, dest, overwrite: true);
-                    }
-            }
-            if (Directory.Exists(old))
-                Directory.Delete(old, true);
-            MoveDirectory(ToolsDir, old);
-        }
-        try
-        {
-            MoveDirectory(staging, ToolsDir);
-        }
-        catch
-        {
-            if (Directory.Exists(old) && !Directory.Exists(ToolsDir))
-                Directory.Move(old, ToolsDir); // never leave the app without its tools
-            throw;
-        }
-        try { Directory.Delete(old, true); } catch { }
-    }
-
-    /// <summary>
-    /// Freshly extracted files are often still open in the antivirus for a moment, which makes a folder move fail
-    /// with "access denied": retry for a few seconds before giving up.
-    /// </summary>
-    private static void MoveDirectory(string from, string to)
-    {
-        for (var attempt = 1; ; attempt++)
-        {
-            try
-            {
-                Directory.Move(from, to);
-                return;
-            }
-            catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) && attempt < 20)
-            {
-                Thread.Sleep(500);
-            }
-        }
     }
 
     private static void Rollback()
@@ -332,7 +253,7 @@ internal static class Program
         }
         if (!Confirm("Reset all Durazzno App settings to their defaults?"))
             return;
-        var running = Process.GetProcessesByName(ProcessName).Length > 0;
+        var running = AppProcesses().Length > 0;
         if (running)
             StopApp();
         File.Move(SettingsFile, SettingsFile + ".bak", overwrite: true);
@@ -378,11 +299,13 @@ internal static class Program
         if (state == "on")
         {
             key.SetValue(RunValue, $"\"{AppExe}\" --background");
+            key.DeleteValue(LegacyRunValue, throwOnMissingValue: false);
             Say("Durazzno App will start with Windows.", ConsoleColor.Green);
         }
         else if (state == "off")
         {
             key.DeleteValue(RunValue, throwOnMissingValue: false);
+            key.DeleteValue(LegacyRunValue, throwOnMissingValue: false);
             Say("Durazzno App will not start with Windows.", ConsoleColor.Green);
         }
         else
@@ -446,18 +369,22 @@ internal static class Program
             return;
         StopApp();
         using (var key = Registry.CurrentUser.CreateSubKey(RunKey))
+        {
             key.DeleteValue(RunValue, throwOnMissingValue: false);
+            key.DeleteValue(LegacyRunValue, throwOnMissingValue: false);
+        }
         // Notification senders (PowerCuts, DiskInfo, Webin Cloud Server...).
         using (var senders = Registry.CurrentUser.OpenSubKey(@"Software\Classes\AppUserModelId", writable: true))
             foreach (var name in senders?.GetSubKeyNames().Where(n => n.StartsWith("Durazzno.", StringComparison.Ordinal)) ?? [])
                 senders!.DeleteSubKeyTree(name, throwOnMissingSubKey: false);
         if (Directory.Exists(DataDir))
             Directory.Delete(DataDir, true);
-        foreach (var file in new[] { AppExe, OldExe, AppExe + ".new" })
+        foreach (var file in new[] { AppExe, OldExe, AppExe + ".new", AppExe + ".staged", Path.Combine(AppDir, LegacyExeName) })
             if (File.Exists(file))
                 File.Delete(file);
-        if (Directory.Exists(ToolsDir))
-            Directory.Delete(ToolsDir, true);
+        var legacyTools = Path.Combine(AppDir, "Tools"); // left by versions that shipped the classic programs
+        if (Directory.Exists(legacyTools))
+            Directory.Delete(legacyTools, true);
 
         // The terminal cannot delete its own exe while running: Windows removes it a moment after it closes.
         Process.Start(new ProcessStartInfo("cmd.exe", $"/c timeout /t 2 /nobreak >nul & del /f /q \"{Environment.ProcessPath}\"")
@@ -593,7 +520,7 @@ internal static class Program
     private static bool StartupEnabled()
     {
         using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-        return key?.GetValue(RunValue) is string;
+        return key?.GetValue(RunValue) is string || key?.GetValue(LegacyRunValue) is string;
     }
 
     private static string? ReadText(string path)

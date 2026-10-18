@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-    Builds Durazzno App (DurazznoAppDaemon.exe) and prepares a signed release for Webin Cloud Server.
+    Builds Durazzno App (DurazznoApp.exe) and prepares a signed release for Webin Cloud Server.
 
 .DESCRIPTION
     Output:
-      dist\DurazznoApp\   Ready-to-run folder: DurazznoAppDaemon.exe (self-contained, single file) + DurazznoTerminal.exe
-      dist\server\        Upload these files to the "durazznoapp.main" path name on Webin Cloud Server
+      dist\DurazznoApp\   Ready-to-run folder: DurazznoApp.exe (self-contained, single file) + DurazznoTerminal.exe
+      dist\server\        Upload these files to durazznoapp/DurazznoApp/Main on Webin Cloud Server
                           (overwriting the previous ones; links stay the same):
-                            manifest.json, manifest.json.sig, DurazznoAppDaemon.exe
+                            manifest.json, manifest.json.sig, DurazznoApp.exe
 
     manifest.json is signed with crypto\update-signing-key.xml (git-ignored, see crypto\README.md);
     the app rejects any manifest whose signature does not verify.
@@ -15,6 +15,7 @@
 .EXAMPLE
     .\scripts\publish.ps1
     .\scripts\publish.ps1 -Version 3.0.1 -Notes "Fixes offline icon" -MinimumSupportedVersion 3.0.0
+    (without -Notes, scripts\release-notes\<version>.txt is used when it exists)
 #>
 param(
     [string]$Version,
@@ -36,10 +37,11 @@ if (-not $Version) {
     $Version = ([xml](Get-Content $project)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
 }
 
-foreach ($dir in $appOut, $serverOut) {
-    if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
-    New-Item $dir -ItemType Directory | Out-Null
-}
+if (Test-Path $serverOut) { Remove-Item $serverOut -Recurse -Force }
+New-Item $serverOut -ItemType Directory | Out-Null
+# The app folder is cleaned except apps\ (apps downloaded from the Apps page; they may be running).
+New-Item $appOut -ItemType Directory -Force | Out-Null
+Get-ChildItem $appOut -Force | Where-Object { $_.Name -ne 'apps' } | Remove-Item -Recurse -Force
 
 # --- App ----------------------------------------------------------------------------------------
 Write-Host "Publishing Durazzno App $Version..."
@@ -59,15 +61,18 @@ Copy-Item (Join-Path $terminalOut 'DurazznoTerminal.exe') $appOut
 Remove-Item $terminalOut -Recurse -Force
 
 # --- Manifest -----------------------------------------------------------------------------------
-Copy-Item (Join-Path $appOut 'DurazznoAppDaemon.exe') $serverOut
+Copy-Item (Join-Path $appOut 'DurazznoApp.exe') $serverOut
 $manifest = [ordered]@{
     app = [ordered]@{
         version = $Version
-        url     = 'DurazznoAppDaemon.exe'   # relative to manifest.json
-        sha256  = (Get-FileHash (Join-Path $serverOut 'DurazznoAppDaemon.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
-        size    = (Get-Item (Join-Path $serverOut 'DurazznoAppDaemon.exe')).Length
+        url     = 'DurazznoApp.exe'   # relative to manifest.json
+        sha256  = (Get-FileHash (Join-Path $serverOut 'DurazznoApp.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+        size    = (Get-Item (Join-Path $serverOut 'DurazznoApp.exe')).Length
     }
 }
+# Release notes: -Notes, or scripts\release-notes\<version>.txt (shown as "What's new" in the app).
+$notesFile = Join-Path $PSScriptRoot "release-notes\$Version.txt"
+if (-not $Notes -and (Test-Path $notesFile)) { $Notes = (Get-Content $notesFile -Raw -Encoding UTF8).Trim() }
 if ($Notes) { $manifest.app.notes = $Notes }
 if ($MinimumSupportedVersion) { $manifest.minimumSupportedVersion = $MinimumSupportedVersion }
 
@@ -83,5 +88,5 @@ $rsa.Dispose()
 
 Write-Host ""
 Write-Host "Done. Durazzno App $Version, manifest signed."
-Write-Host "  Run locally : $appOut\DurazznoAppDaemon.exe  (recovery console: DurazznoTerminal.exe)"
-Write-Host "  Upload      : $serverOut\{manifest.json, manifest.json.sig, DurazznoAppDaemon.exe}  ->  path name durazznoapp.main"
+Write-Host "  Run locally : $appOut\DurazznoApp.exe  (recovery console: DurazznoTerminal.exe)"
+Write-Host "  Upload      : $serverOut\{manifest.json, manifest.json.sig, DurazznoApp.exe}  ->  durazznoapp/DurazznoApp/Main"

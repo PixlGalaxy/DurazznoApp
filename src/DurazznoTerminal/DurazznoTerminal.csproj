@@ -13,7 +13,7 @@
     <Company>Galaxy Apps</Company>
     <ApplicationIcon>..\DurazznoApp\Assets\Logos\durazzno_icon.ico</ApplicationIcon>
 
-    <!-- Native, self-contained and small: it must keep working when DurazznoAppDaemon.exe does not. -->
+    <!-- Native, self-contained and small: it must keep working when DurazznoApp.exe does not. -->
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
     <OptimizationPreference>Size</OptimizationPreference>

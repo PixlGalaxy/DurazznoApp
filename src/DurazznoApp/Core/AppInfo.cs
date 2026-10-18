@@ -14,9 +14,11 @@ internal static class AppInfo
     /// <summary>Folder that holds the exe (also correct for single-file publish).</summary>
     public static string BaseDir => AppContext.BaseDirectory;
 
-    public static string ExePath => Environment.ProcessPath ?? Path.Combine(BaseDir, "DurazznoAppDaemon.exe");
+    /// <summary>The app's file name. Versions before 3.0.1 were DurazznoAppDaemon.exe; updating renames it.</summary>
+    public const string ExeFileName = "DurazznoApp.exe";
 
-    public static string ToolsDir => Path.Combine(BaseDir, "Tools");
+    public static string ExePath => Environment.ProcessPath ?? Path.Combine(BaseDir, ExeFileName);
+
 
     /// <summary>Per-user data: settings and logs. Kept out of the install folder so updates never touch it.</summary>
     public static string DataDir { get; } = Directory.CreateDirectory(

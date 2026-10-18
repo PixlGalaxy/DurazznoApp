@@ -27,8 +27,8 @@
     <SolidColorBrush x:Key="InfoChip" Color="#0C2230" />
 
     <!-- ═══ Fonts ═════════════════════════════════════════════════════════ -->
-    <FontFamily x:Key="BrandFont">pack://application:,,,/DurazznoAppDaemon;component/Assets/Fonts/#RACE SPACE REGULAR 1</FontFamily>
-    <FontFamily x:Key="HeadingFont">pack://application:,,,/DurazznoAppDaemon;component/Assets/Fonts/#Rajdhani</FontFamily>
+    <FontFamily x:Key="BrandFont">pack://application:,,,/DurazznoApp;component/Assets/Fonts/#RACE SPACE REGULAR 1</FontFamily>
+    <FontFamily x:Key="HeadingFont">pack://application:,,,/DurazznoApp;component/Assets/Fonts/#Rajdhani</FontFamily>
     <FontFamily x:Key="BodyFont">Segoe UI</FontFamily>
     <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas</FontFamily>
 

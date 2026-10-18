@@ -6,7 +6,8 @@ namespace Durazzno.Core;
 internal static class StartupManager
 {
     private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string ValueName = "DurazznoApp Daemon";
+    private const string ValueName = "Durazzno App";
+    private const string LegacyValueName = "DurazznoApp Daemon"; // before 3.0.1
 
     private static string Command => $"\"{AppInfo.ExePath}\" {Program.BackgroundFlag}";
 
@@ -38,8 +39,27 @@ internal static class StartupManager
     /// <summary>If the exe was moved, point the existing startup entry at the new location.</summary>
     public static void RepairPath()
     {
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey);
-        if (key?.GetValue(ValueName) is string current && !string.Equals(current, Command, StringComparison.OrdinalIgnoreCase))
-            SetEnabled(true);
+        bool legacy;
+        using (var key = Registry.CurrentUser.OpenSubKey(RunKey))
+        {
+            legacy = key?.GetValue(LegacyValueName) is string;
+            if (!legacy && key?.GetValue(ValueName) is string current && !string.Equals(current, Command, StringComparison.OrdinalIgnoreCase))
+                SetEnabled(true);
+        }
+        if (legacy)
+        {
+            // Renamed from "DurazznoApp Daemon" (DurazznoAppDaemon.exe): move the entry to the new name and exe.
+            try
+            {
+                using var key = Registry.CurrentUser.CreateSubKey(RunKey);
+                key.DeleteValue(LegacyValueName, throwOnMissingValue: false);
+                key.SetValue(ValueName, Command);
+                Log.Info("Startup entry renamed to \"Durazzno App\"");
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Could not rename the startup entry", ex);
+            }
+        }
     }
 }

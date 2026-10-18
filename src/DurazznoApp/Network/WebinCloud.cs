@@ -9,17 +9,19 @@ internal static class WebinCloud
     // Test server: "http://192.168.0.150:5002"   Production: "https://webincloud.itzgalaxy.com"
     public const string Server = "http://192.168.0.150:5002";
 
-    /// <summary>Path name holding manifest.json, manifest.json.sig and DurazznoAppDaemon.exe.</summary>
-    public const string MainPath = "durazznoapp.main";
+    // Path name "durazznoapp" on Webin Cloud Server, with one folder per kind of file.
 
-    /// <summary>Path name reserved for future apps.</summary>
-    public const string AppsPath = "durazznoapp.apps";
+    /// <summary>Folder holding manifest.json, manifest.json.sig and DurazznoApp.exe.</summary>
+    public const string MainPath = "durazznoapp/DurazznoApp/Main";
+
+    /// <summary>Folder holding the Apps catalog (apps.json, apps.json.sig), the app files and their icons.</summary>
+    public const string AppsPath = "durazznoapp/DurazznoApp/Apps";
 
     public const string ManifestFile = "manifest.json";
 
     public static Uri DefaultManifestUri => FileUri(MainPath, ManifestFile);
 
-    /// <summary>Raw download link of a file: {Server}/backend/api/public/{path name}/{file}/download?inline=1&amp;path=</summary>
+    /// <summary>Raw download link of a file: {Server}/backend/api/public/{path name/folder}/{file}/download?inline=1&amp;path=</summary>
     public static Uri FileUri(string pathName, string fileName, string server = Server) =>
         new($"{server.TrimEnd('/')}/backend/api/public/{pathName}/{Uri.EscapeDataString(fileName)}/download?inline=1&path=");
 
@@ -55,7 +57,7 @@ internal static class WebinCloud
 
     /// <summary>
     /// A manifest override (settings "manifestUrl" / "DurazznoTerminal server"): empty = default; a bare server
-    /// ("https://host" or "http://ip:port") = that server's durazznoapp.main manifest; anything else is used as is.
+    /// ("https://host" or "http://ip:port") = that server's Main folder manifest; anything else is used as is.
     /// </summary>
     public static Uri ResolveManifest(string? configured)
     {

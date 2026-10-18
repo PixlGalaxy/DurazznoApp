@@ -1,0 +1,1 @@
+Durazzno App 3.0 is a full rewrite in C# with its own tools instead of bundled third-party programs: DiskInfo, DiskMark, DiskMap with cleanup, StartupHub with boot impact, TimerResolution, DriverHub and PowerCuts. Also new: a live Dashboard with GPU, network and battery, S.M.A.R.T. history with alerts, and signed automatic updates from Webin Cloud Server.

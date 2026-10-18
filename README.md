@@ -4,7 +4,7 @@ Tray app for Windows with the PC tools I actually use, all in one window: disk h
 startup items, timer resolution, drivers and scheduled shutdowns. It updates itself from my Webin Cloud Server.
 
 It's a C# (.NET 9, WPF) rewrite of the original 2022 Python version. Everything ships as a single exe,
-`DurazznoAppDaemon.exe`, with no .NET or Python install needed. Next to it there's `DurazznoTerminal.exe`, a small
+`DurazznoApp.exe`, with no .NET or Python install needed. Next to it there's `DurazznoTerminal.exe`, a small
 recovery console for when the app won't start.
 
 ## What's inside
@@ -30,7 +30,6 @@ the next time the PC starts. Otherwise you get a notification and an **APPLY UPD
 so the app only installs builds I published.
 
 The server address lives in one place: `WebinCloud.Server` in `src/DurazznoApp/Network/WebinCloud.cs`.
-How to publish a new version is in [webincloud/README.md](webincloud/README.md).
 
 ## Building
 
@@ -56,7 +55,7 @@ like `DurazznoTerminal.exe repair`.
 src/DurazznoApp/         the app
 src/DurazznoTerminal/    recovery console
 scripts/publish.ps1      build and sign a release
-webincloud/              how releases get published
+scripts/publish-apps.ps1 build and sign the Apps catalog
 ```
 
 Settings and logs are stored in `%LOCALAPPDATA%\DurazznoApp\`.

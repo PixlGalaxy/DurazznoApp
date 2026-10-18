@@ -7,11 +7,17 @@ obj/
 *.user
 .vs/
 
-# Third-party tool binaries (shipped as Tools.zip, not stored in git)
-/tools/
-
 # Update signing key (private): never commit
 /crypto/
 
 # Local to-do list: never commit
 /TODO.md
+
+# Apps catalog source (apps.json + app files): published with scripts\publish-apps.ps1
+/apps-catalog/
+
+# Power Link Sound (separate app, kept local)
+/src/PowerLinkSound/
+
+# Webin Cloud publishing notes (local only)
+/webincloud/

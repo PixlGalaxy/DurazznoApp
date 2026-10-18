@@ -37,6 +37,9 @@ internal sealed class DiskMarkPage : UserControl, IDisposable
     private int _passes = 3;
     private BenchMode _mode = BenchMode.ReadWrite;
 
+    /// <summary>Interface of each drive letter ("NVMe", "SATA", "USB"...), read once from the disk scan.</summary>
+    private Dictionary<string, (string Bus, bool Ssd)> _bus = new(StringComparer.OrdinalIgnoreCase);
+
     public DiskMarkPage(AppController app, ToolDefinition tool)
     {
         _app = app;
@@ -53,11 +56,12 @@ internal sealed class DiskMarkPage : UserControl, IDisposable
         copy.Click += (_, _) => CopyResults();
 
         var header = new Grid();
-        header.Children.Add(Ui.Row(Ui.IconChip(tool.Icon, accent, Imaging.Brush(tool.Accent, 0x26), 64, 30), title));
+        header.Children.Add(Ui.Row(Ui.IconChip(tool.Icon, accent, Imaging.Brush(tool.Accent, 0x26), 64, 52), title));
         header.Children.Add(copy);
 
         _start = new Button { Style = Ui.Res<Style>("PrimaryButton"), Content = IconLabel("zap", "START BENCHMARK", Ui.B("AccentText")), Padding = new Thickness(22, 10, 22, 10), HorizontalAlignment = HorizontalAlignment.Stretch };
         _start.Click += (_, _) => _bench.Start(_drive, _profile, _sizeMiB, _passes, _mode);
+        _ = LoadBusTypesAsync();
         _stop = new Button { Style = Ui.Res<Style>("DangerButton"), Content = IconLabel("x", "STOP", Brushes.White), Padding = new Thickness(22, 10, 22, 10), HorizontalAlignment = HorizontalAlignment.Stretch };
         _stop.Click += (_, _) => _bench.Stop();
 
@@ -170,7 +174,7 @@ internal sealed class DiskMarkPage : UserControl, IDisposable
         header.Children.Add(Ui.PanelTitle($"RESULTS  ·  {_drive}"));
         if (run?.Read.GetValueOrDefault(tests[0].Key) is { } seq)
         {
-            var (grade, tone) = Grade(seq.MBs);
+            var (grade, tone) = Grade(seq.MBs, _bus.TryGetValue(_drive, out var bus) ? bus : null);
             var badge = new Border
             {
                 Background = Imaging.Brush(tone, 0x26),
@@ -250,14 +254,59 @@ internal sealed class DiskMarkPage : UserControl, IDisposable
         return stack;
     }
 
-    private static (string Text, string Color) Grade(double seqReadMBs) => seqReadMBs switch
+    private async Task LoadBusTypesAsync()
     {
-        >= 5000 => ("PCIe 4.0+ NVMe CLASS", "#22C55E"),
-        >= 2000 => ("PCIe 3.0 NVMe CLASS", "#22C55E"),
-        >= 400 => ("SATA SSD CLASS", "#38BDF8"),
-        >= 120 => ("HDD / USB 3 CLASS", "#F59E0B"),
-        _ => ("SLOW / USB 2 CLASS", "#EF4444"),
-    };
+        try
+        {
+            var map = new Dictionary<string, (string, bool)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var disk in await _app.Disks.ScanAsync())
+                foreach (var letter in disk.DriveLetters)
+                    map[letter.TrimEnd('\\')] = (disk.BusType, disk.IsSsd);
+            _bus = map;
+            Render();
+        }
+        catch (Exception ex)
+        {
+            Core.Log.Warn($"DiskMark: drive types: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// The badge names the drive's real interface and how fast it measured for it. Speed alone used to decide, so a slow
+    /// NVMe drive (or a short / interrupted run) was labelled "SATA SSD".
+    /// </summary>
+    private static (string Text, string Color) Grade(double seqReadMBs, (string Bus, bool Ssd)? drive)
+    {
+        var bus = drive?.Bus ?? "";
+        if (bus.Equals("NVMe", StringComparison.OrdinalIgnoreCase))
+            return seqReadMBs switch
+            {
+                >= 5000 => ("NVMe  ·  PCIe 4.0+ SPEED", "#22C55E"),
+                >= 2000 => ("NVMe  ·  PCIe 3.0 SPEED", "#22C55E"),
+                _ => ("NVMe  ·  BELOW PCIe 3.0 SPEED", "#F59E0B"),
+            };
+        if (bus.Equals("USB", StringComparison.OrdinalIgnoreCase))
+            return seqReadMBs switch
+            {
+                >= 800 => ("USB  ·  USB 3.2 / NVMe ENCLOSURE SPEED", "#22C55E"),
+                >= 120 => ("USB  ·  USB 3 SPEED", "#38BDF8"),
+                _ => ("USB  ·  USB 2 SPEED", "#EF4444"),
+            };
+        if (drive is { } known && bus.Length > 0)
+            return known.Ssd
+                ? (seqReadMBs >= 400 ? ("SATA SSD  ·  FULL SPEED", "#38BDF8") : ("SATA SSD  ·  SLOWER THAN USUAL", "#F59E0B"))
+                : (seqReadMBs >= 120 ? ("HDD  ·  NORMAL SPEED", "#F59E0B") : ("HDD  ·  SLOW", "#EF4444"));
+
+        // Interface unknown (scan not finished or not readable): speed only.
+        return seqReadMBs switch
+        {
+            >= 5000 => ("PCIe 4.0+ NVMe CLASS", "#22C55E"),
+            >= 2000 => ("PCIe 3.0 NVMe CLASS", "#22C55E"),
+            >= 400 => ("SSD CLASS", "#38BDF8"),
+            >= 120 => ("HDD / USB 3 CLASS", "#F59E0B"),
+            _ => ("SLOW / USB 2 CLASS", "#EF4444"),
+        };
+    }
 
     private void CopyResults()
     {

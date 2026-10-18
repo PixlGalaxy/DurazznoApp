@@ -13,7 +13,7 @@ internal sealed record UpdateProgress(string Phase, double? Percent);
 
 /// <summary>
 /// Durazzno App updates in two steps:
-///  1. Stage: the new exe is downloaded next to the current one as DurazznoAppDaemon.exe.staged and checked against
+///  1. Stage: the new exe is downloaded next to the current one as DurazznoApp.exe.staged and checked against
 ///     the SHA-256 in the signed manifest. This can happen in the background while the app runs.
 ///  2. Apply: the running exe is renamed to .old (Windows allows that; Durazzno Terminal can roll back to it), the
 ///     staged exe takes its place and the app restarts. Done at the next start, or right away when the user asks.
@@ -27,8 +27,44 @@ internal static class UpdateService
     private static string StagedExe => AppInfo.ExePath + ".staged";
     private static string OldExe => AppInfo.ExePath + ".old";
     private static string StagedInfo => Path.Combine(AppInfo.DataDir, "update-staged.json");
+    private static string WhatsNewFile => Path.Combine(AppInfo.DataDir, "whats-new.json");
 
     private sealed record Staged(string Version, string Sha256);
+    private sealed record ReleaseNotes(string Version, string Notes);
+
+    /// <summary>
+    /// Keeps the manifest's "notes" for a version, so the updated app can show what changed (notification, Settings)
+    /// even before it reads the manifest again.
+    /// </summary>
+    public static void SaveNotes(PackageInfo app)
+    {
+        if (string.IsNullOrWhiteSpace(app.Notes) || NotesFor(app.Version) == app.Notes.Trim())
+            return;
+        try
+        {
+            File.WriteAllText(WhatsNewFile, JsonSerializer.Serialize(new ReleaseNotes(app.Version, app.Notes.Trim())));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Could not save the release notes: {ex.Message}");
+        }
+    }
+
+    /// <summary>The saved release notes of <paramref name="version"/>, if any.</summary>
+    public static string? NotesFor(string version)
+    {
+        try
+        {
+            if (File.Exists(WhatsNewFile) && JsonSerializer.Deserialize<ReleaseNotes>(File.ReadAllText(WhatsNewFile)) is { } notes
+                && notes.Version == version)
+                return notes.Notes;
+        }
+        catch
+        {
+            // a broken file just means no notes
+        }
+        return null;
+    }
 
     /// <summary>Removes half-finished downloads and staged copies that are not newer than this version. Call at startup.</summary>
     public static void CleanupLeftovers()
@@ -57,6 +93,7 @@ internal static class UpdateService
         await DownloadVerifiedAsync(manifest.Resolve(manifest.App), manifest.App.Sha256, manifest.App.Size, NewExe, progress, ct);
         File.Move(NewExe, StagedExe, overwrite: true);
         File.WriteAllText(StagedInfo, JsonSerializer.Serialize(new Staged(manifest.App.Version, manifest.App.Sha256)));
+        SaveNotes(manifest.App);
         Log.Info($"Durazzno App {manifest.App.Version} is staged");
     }
 
@@ -88,13 +125,15 @@ internal static class UpdateService
 
     /// <summary>
     /// Runs in the staged exe: waits for the old version to exit, keeps it as .old, copies itself over
-    /// DurazznoAppDaemon.exe and starts it. If anything fails the old exe is put back and started, so the PC never
+    /// DurazznoApp.exe and starts it. If anything fails the old exe is put back and started, so the PC never
     /// ends up without Durazzno.
     /// </summary>
     public static int RunFinish(string[] args)
     {
         var staged = Environment.ProcessPath!;
-        var target = staged.EndsWith(".staged", StringComparison.OrdinalIgnoreCase) ? staged[..^".staged".Length] : staged;
+        // The exe being replaced (DurazznoAppDaemon.exe on versions before 3.0.1) and the name it gets now.
+        var previous = staged.EndsWith(".staged", StringComparison.OrdinalIgnoreCase) ? staged[..^".staged".Length] : staged;
+        var target = Path.Combine(Path.GetDirectoryName(previous)!, AppInfo.ExeFileName);
         var old = target + ".old";
         var open = args.Contains(OpenFlag);
         try
@@ -103,8 +142,8 @@ internal static class UpdateService
             {
                 try
                 {
-                    using var previous = Process.GetProcessById(pid);
-                    previous.WaitForExit(30_000);
+                    using var running = Process.GetProcessById(pid);
+                    running.WaitForExit(30_000);
                 }
                 catch (ArgumentException)
                 {
@@ -112,15 +151,15 @@ internal static class UpdateService
                 }
             }
 
-            Retry(() => File.Move(target, old, overwrite: true));
+            Retry(() => File.Move(previous, old, overwrite: true));
             try
             {
                 Retry(() => File.Copy(staged, target, overwrite: false));
             }
             catch
             {
-                if (!File.Exists(target) && File.Exists(old))
-                    File.Move(old, target);
+                if (!File.Exists(previous) && File.Exists(old))
+                    File.Move(old, previous);
                 throw;
             }
 
@@ -132,8 +171,9 @@ internal static class UpdateService
         catch (Exception ex)
         {
             Log.Error("Finishing the update failed; starting the previous version", ex);
-            if (File.Exists(target))
-                Process.Start(new ProcessStartInfo(target, open ? OpenFlag : "--background") { UseShellExecute = false })?.Dispose();
+            var start = File.Exists(target) ? target : previous;
+            if (File.Exists(start))
+                Process.Start(new ProcessStartInfo(start, open ? OpenFlag : "--background") { UseShellExecute = false })?.Dispose();
             return 1;
         }
     }

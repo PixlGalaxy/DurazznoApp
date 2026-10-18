@@ -24,7 +24,14 @@ internal sealed class DashboardPage : UserControl, IDisposable
     private readonly StatCard _memoryCard;
     private readonly StatCard _storageCard;
     private readonly StatCard _uptimeCard;
-    private readonly BarChart _chart = new() { Height = 210, Capacity = HistorySeconds };
+    private readonly BarChart _chart = new() { Height = 160, Capacity = HistorySeconds };
+    private readonly GpuMonitor _gpu = new();
+    private readonly NetworkMonitor _network = new();
+    private readonly List<(StatCard Card, int Index)> _gpuCards = [];
+    private readonly StatCard _networkCard;
+    private readonly StatCard? _batteryCard;
+    private readonly StatCard? _processCard;
+    private BatteryHealth? _batteryHealth;
     private readonly TextBlock _chartNow;
     private readonly StackPanel _drives = new();
     private readonly TextBlock _connectionValue;
@@ -51,6 +58,32 @@ internal sealed class DashboardPage : UserControl, IDisposable
         kpis.Children.Add(_storageCard.At(4));
         kpis.Children.Add(_uptimeCard.At(6));
 
+        // Second row: each GPU (up to two), network, battery on laptops; processes fill a free slot.
+        var live = new List<StatCard>();
+        foreach (var (name, index) in _gpu.Names.Take(2).Select((n, i) => (n, i)))
+        {
+            var card = new StatCard($"GPU  ·  {ShortGpuName(name)}", "monitor", Ui.B("Accent"), Ui.B("AccentChip"));
+            _gpuCards.Add((card, index));
+            live.Add(card);
+        }
+        _networkCard = new StatCard("NETWORK", "wifi", Ui.B("Info"), Ui.B("InfoChip"));
+        live.Add(_networkCard);
+        if (BatteryInfo.HasBattery)
+        {
+            _batteryCard = new StatCard("BATTERY", "battery", Ui.B("Success"), Imaging.Brush("#22C55E", 0x26));
+            live.Add(_batteryCard);
+            _batteryHealth = BatteryInfo.Health();
+        }
+        if (live.Count < 4)
+        {
+            _processCard = new StatCard("PROCESSES", "square-stack", Ui.B("Text"), Ui.B("SelectedBg"));
+            live.Add(_processCard);
+        }
+        var liveRow = Ui.Columns(4, 20);
+        liveRow.Margin = new Thickness(0, 20, 0, 0);
+        for (var i = 0; i < Math.Min(4, live.Count); i++)
+            liveRow.Children.Add(live[i].At(i * 2));
+
         var main = Ui.Columns(3, 20);
         main.Margin = new Thickness(0, 20, 0, 0);
         main.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -65,6 +98,7 @@ internal sealed class DashboardPage : UserControl, IDisposable
             Ui.Text("Dashboard", "PageTitle"),
             Ui.Text($"{SystemInfo.MachineName}  ·  {SystemInfo.OsName}", "PageSubtitle"),
             kpis,
+            liveRow,
             main);
 
         _timer.Tick += (_, _) => Tick();
@@ -88,6 +122,7 @@ internal sealed class DashboardPage : UserControl, IDisposable
     public void Dispose()
     {
         _timer.Stop();
+        _gpu.Dispose();
         _app.StatusChanged -= OnStatusChanged;
     }
 
@@ -108,8 +143,67 @@ internal sealed class DashboardPage : UserControl, IDisposable
         var uptime = SystemInfo.Uptime;
         _uptimeCard.Set(SystemInfo.FormatUptime(uptime), $"Since {DateTime.Now - uptime:MMM d, HH:mm}");
 
+        RefreshLive();
         if (++_ticks % 15 == 0)
             RefreshDrives();
+    }
+
+    private void RefreshLive()
+    {
+        var gpus = _gpu.Sample();
+        foreach (var (card, index) in _gpuCards)
+        {
+            if (index >= gpus.Count)
+                continue;
+            var g = gpus[index];
+            var parts = new List<string>();
+            if (g.TemperatureC is { } t)
+                parts.Add($"{t:0} °C");
+            if (g.MemoryUsed is { } used && g.MemoryTotal is { } total)
+                parts.Add($"{SystemInfo.FormatBytes(used)} of {SystemInfo.FormatBytes(total)}");
+            card.Set($"{g.Usage:0}%", parts.Count > 0 ? string.Join("  ·  ", parts) : g.Usage < 1 ? "Idle" : "");
+        }
+
+        var (down, up, adapter, speed) = _network.Sample();
+        var link = speed is { } bps ? (bps >= 1_000_000_000 ? $"{bps / 1e9:0.#} Gbps" : $"{bps / 1e6:0} Mbps") : null;
+        _networkCard.Set($"↓ {Rate(down)}", string.Join("  ·  ", new[] { $"↑ {Rate(up)}", adapter, link }.Where(x => !string.IsNullOrEmpty(x))));
+
+        if (_batteryCard is not null)
+        {
+            if (_ticks % 300 == 0)
+                _batteryHealth = BatteryInfo.Health() ?? _batteryHealth;
+            var (percent, plugged, charging, remaining) = BatteryInfo.Status();
+            var state = charging ? "Charging" : plugged ? "Plugged in" : remaining is { } left ? $"{SystemInfo.FormatUptime(left)} left" : "On battery";
+            var health = _batteryHealth is { } h ? $"health {h.Percent:0}%" : null;
+            _batteryCard.Set($"{percent}%", health is null ? state : $"{state}  ·  {health}");
+            _batteryCard.ToolTip = _batteryHealth is { } bh
+                ? $"Full charge {bh.FullChargeCapacity:N0} mWh of {bh.DesignCapacity:N0} mWh design" + (bh.Cycles is { } c ? $"  ·  {c} charge cycles" : "")
+                : null;
+        }
+
+        if (_processCard is not null && _ticks % 5 == 0)
+        {
+            var processes = System.Diagnostics.Process.GetProcesses();
+            var threads = 0;
+            foreach (var p in processes)
+            {
+                try { threads += p.Threads.Count; } catch { }
+                p.Dispose();
+            }
+            _processCard.Set(processes.Length.ToString(), $"{threads:N0} threads");
+        }
+    }
+
+    private static string Rate(double bytesPerSecond) =>
+        bytesPerSecond < 1024 ? $"{bytesPerSecond:0} B/s" : $"{SystemInfo.FormatBytes(bytesPerSecond)}/s";
+
+    // "NVIDIA GeForce RTX 4070 Laptop GPU" -> "RTX 4070 LAPTOP GPU", "Intel UHD Graphics" -> "UHD GRAPHICS"
+    private static string ShortGpuName(string name)
+    {
+        foreach (var prefix in new[] { "NVIDIA ", "GeForce ", "Intel ", "AMD ", "Radeon " })
+            if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && name.Length > prefix.Length + 3)
+                name = name[prefix.Length..];
+        return name.ToUpperInvariant();
     }
 
     private UIElement BuildChartPanel()
@@ -226,7 +320,7 @@ internal sealed class DashboardPage : UserControl, IDisposable
     {
         var list = Ui.Stack(Ui.PanelTitle("TOOLS"));
         var items = new StackPanel { Margin = new Thickness(-10, 10, -10, 0) };
-        foreach (var tool in ToolCatalog.All.Where(t => !t.External))
+        foreach (var tool in ToolCatalog.All)
         {
             var accent = Imaging.Brush(tool.Accent);
             var row = new Grid();

@@ -26,18 +26,7 @@ internal static class ServerClient
     /// <summary>Downloads manifest.json and manifest.json.sig, checks the signature, then parses and validates it.</summary>
     public static async Task<UpdateManifest> GetManifestAsync(Uri uri, CancellationToken ct)
     {
-        var bytes = await ReadAllBytesAsync(uri, ct).ConfigureAwait(false);
-        string signature;
-        try
-        {
-            signature = System.Text.Encoding.ASCII.GetString(await ReadAllBytesAsync(WebinCloud.SignatureOf(uri), ct).ConfigureAwait(false));
-        }
-        catch (Exception ex) when (ex is HttpRequestException or IOException)
-        {
-            throw new InvalidDataException("The update manifest is not signed (manifest.json.sig is missing).", ex);
-        }
-        if (!UpdateSignature.IsValid(bytes, signature))
-            throw new InvalidDataException("The update manifest's signature is not valid; it was ignored.");
+        var bytes = await GetSignedAsync(uri, "update manifest", ct).ConfigureAwait(false);
 
         UpdateManifest? manifest;
         try
@@ -54,6 +43,27 @@ internal static class ServerClient
         manifest.Source = uri;
         manifest.Validate();
         return manifest;
+    }
+
+    /// <summary>
+    /// Downloads a file and its .sig (published by publish.ps1 / publish-apps.ps1) and returns the bytes only when the
+    /// signature verifies against Durazzno's public key.
+    /// </summary>
+    public static async Task<byte[]> GetSignedAsync(Uri uri, string what, CancellationToken ct)
+    {
+        var bytes = await ReadAllBytesAsync(uri, ct).ConfigureAwait(false);
+        string signature;
+        try
+        {
+            signature = System.Text.Encoding.ASCII.GetString(await ReadAllBytesAsync(WebinCloud.SignatureOf(uri), ct).ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException)
+        {
+            throw new InvalidDataException($"The {what} is not signed (its .sig file is missing).", ex);
+        }
+        if (!UpdateSignature.IsValid(bytes, signature))
+            throw new InvalidDataException($"The {what}'s signature is not valid; it was ignored.");
+        return bytes;
     }
 
     /// <summary>Opens a remote (http/https) or local (file://) resource for reading. Length is null when unknown.</summary>

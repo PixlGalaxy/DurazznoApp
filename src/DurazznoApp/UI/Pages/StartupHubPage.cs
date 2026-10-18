@@ -15,8 +15,18 @@ namespace Durazzno.UI.Pages;
 /// <summary>One row of the StartupHub list (public so the XAML data template can bind to it).</summary>
 public sealed class StartupRow
 {
-    internal StartupRow(StartupEntry e)
+    internal StartupRow(StartupEntry e, StartupImpact impact = StartupImpact.NotMeasured)
     {
+        (ImpactText, var impactColor) = impact switch
+        {
+            StartupImpact.High => ("HIGH", "#EF4444"),
+            StartupImpact.Medium => ("MEDIUM", "#F97316"),
+            StartupImpact.Low => ("LOW", "#22C55E"),
+            StartupImpact.None => ("NOT RUN", "#64748B"),
+            _ => ("", "#64748B"),
+        };
+        ImpactBrush = Imaging.Brush(impactColor);
+        ImpactBackground = Imaging.Brush(impactColor, impact == StartupImpact.NotMeasured ? (byte)0 : (byte)0x22);
         Entry = e;
         Name = e.Name;
         Enabled = e.Enabled;
@@ -62,6 +72,9 @@ public sealed class StartupRow
     public string Icon { get; }
     public Brush IconBrush { get; }
     public string StatusText { get; }
+    public string ImpactText { get; }
+    public Brush ImpactBrush { get; }
+    public Brush ImpactBackground { get; }
     public Brush StatusBrush { get; }
     public Brush StatusBackground { get; }
 }
@@ -73,13 +86,14 @@ internal sealed class StartupHubPage : UserControl, IDisposable
 
     private static readonly DataTemplate RowTemplate = (DataTemplate)XamlReader.Parse("""
         <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                      xmlns:c="clr-namespace:Durazzno.UI.Controls;assembly=DurazznoAppDaemon">
+                      xmlns:c="clr-namespace:Durazzno.UI.Controls;assembly=DurazznoApp">
             <Grid Height="46">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="58" />
                     <ColumnDefinition Width="28" />
                     <ColumnDefinition Width="1.1*" />
                     <ColumnDefinition Width="1.6*" />
+                    <ColumnDefinition Width="86" />
                     <ColumnDefinition Width="104" />
                 </Grid.ColumnDefinitions>
                 <CheckBox Style="{DynamicResource ToggleSwitch}" IsChecked="{Binding Enabled, Mode=OneWay}" IsEnabled="{Binding CanToggle}"
@@ -91,7 +105,10 @@ internal sealed class StartupHubPage : UserControl, IDisposable
                 </StackPanel>
                 <TextBlock Grid.Column="3" Text="{Binding Command}" Foreground="#9A9AA3" FontFamily="Cascadia Mono, Consolas" FontSize="11.5"
                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Opacity="{Binding Opacity}" Margin="0,0,12,0" />
-                <Border Grid.Column="4" Background="{Binding StatusBackground}" Padding="8,3" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <Border Grid.Column="4" Background="{Binding ImpactBackground}" Padding="8,3" HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding ImpactText}" Foreground="{Binding ImpactBrush}" FontSize="11" FontWeight="Bold" />
+                </Border>
+                <Border Grid.Column="5" Background="{Binding StatusBackground}" Padding="8,3" HorizontalAlignment="Right" VerticalAlignment="Center">
                     <TextBlock Text="{Binding StatusText}" Foreground="{Binding StatusBrush}" FontSize="11" FontWeight="Bold" />
                 </Border>
             </Grid>
@@ -107,6 +124,10 @@ internal sealed class StartupHubPage : UserControl, IDisposable
     private readonly TextBlock _summary = Ui.Text("Scanning…", "CardHint");
     private readonly ContentControl _detail = new() { Focusable = false };
     private readonly Button _refresh;
+    private readonly Button _measure;
+    private readonly TextBlock _bootInfo = Ui.Text("", "CardHint");
+    private BootImpactData? _impact = BootImpact.LoadCached();
+    private HashSet<string> _entryImages = new(StringComparer.OrdinalIgnoreCase);
 
     private List<StartupEntry> _entries = [];
     private StartupCategory? _category;
@@ -130,12 +151,16 @@ internal sealed class StartupHubPage : UserControl, IDisposable
         _refresh = new Button { Style = Ui.Res<Style>("SecondaryButton"), Content = IconLabel("refresh-cw", "REFRESH", Ui.B("Text")), Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
         System.Windows.Automation.AutomationProperties.SetName(_refresh, "REFRESH");
         _refresh.Click += async (_, _) => await LoadAsync();
-        var actions = Ui.Row(_search, _refresh);
+        _measure = new Button { Style = Ui.Res<Style>("SecondaryButton"), Content = IconLabel("timer", "BOOT IMPACT", Ui.B("Text")), Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "Reads how long Windows took to boot and how much CPU and disk each startup entry used at your last logon (asks for admin once)." };
+        System.Windows.Automation.AutomationProperties.SetName(_measure, "BOOT IMPACT");
+        _measure.Click += async (_, _) => await MeasureImpactAsync();
+        var actions = Ui.Row(_search, _measure, _refresh);
         actions.HorizontalAlignment = HorizontalAlignment.Right;
         actions.VerticalAlignment = VerticalAlignment.Center;
 
         var header = new Grid();
-        header.Children.Add(Ui.Row(Ui.IconChip(tool.Icon, accent, Imaging.Brush(tool.Accent, 0x26), 64, 30), title));
+        header.Children.Add(Ui.Row(Ui.IconChip(tool.Icon, accent, Imaging.Brush(tool.Accent, 0x26), 64, 52), title));
         header.Children.Add(actions);
 
         _hideMicrosoft.Style = Ui.Res<Style>("ToggleSwitch");
@@ -179,17 +204,18 @@ internal sealed class StartupHubPage : UserControl, IDisposable
         }));
 
         var headerRow = new Grid { Margin = new Thickness(0, 12, 0, 0) };
-        foreach (var (text, col) in new[] { ("ON", 0), ("ENTRY", 2), ("COMMAND", 3), ("STATUS", 4) })
+        foreach (var (text, col) in new[] { ("ON", 0), ("ENTRY", 2), ("COMMAND", 3), ("IMPACT", 4), ("STATUS", 5) })
         {
             var h = Ui.Text(text, "CardLabel", Ui.B("TextDim"));
             h.FontSize = 12.5;
-            if (col == 4) h.HorizontalAlignment = HorizontalAlignment.Right;
+            if (col == 5) h.HorizontalAlignment = HorizontalAlignment.Right;
             headerRow.Children.Add(h.At(col));
         }
         headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(58) });
         headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
         headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.1, GridUnitType.Star) });
         headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1.6, GridUnitType.Star) });
+        headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(86) });
         headerRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(104) });
 
         var main = Ui.Columns(2, 20);
@@ -198,7 +224,9 @@ internal sealed class StartupHubPage : UserControl, IDisposable
         main.Children.Add(Ui.Card(Ui.Stack(Ui.PanelTitle("AUTOSTART ENTRIES"), headerRow, _list)).At(0));
         main.Children.Add(Ui.Card(_detail).At(2));
 
-        Content = Ui.Stack(header, filters, _summary, main);
+        _bootInfo.Margin = new Thickness(0, 4, 0, 0);
+        Content = Ui.Stack(header, filters, _summary, _bootInfo, main);
+        RenderBootInfo();
 
         IsVisibleChanged += async (_, _) =>
         {
@@ -240,6 +268,55 @@ internal sealed class StartupHubPage : UserControl, IDisposable
             _refresh.IsEnabled = true;
         }
     }
+
+    private async Task MeasureImpactAsync()
+    {
+        _measure.IsEnabled = false;
+        _bootInfo.Foreground = Ui.B("TextMuted");
+        _bootInfo.Text = "Reading boot and logon data…";
+        try
+        {
+            var error = await BootImpact.MeasureAsync();
+            _impact = BootImpact.LoadCached();
+            if (error is not null)
+            {
+                _bootInfo.Foreground = Ui.B("Warning");
+                _bootInfo.Text = error == "Cancelled" ? "Boot impact needs admin rights to read Windows' startup records." : error;
+                return;
+            }
+            RenderList();
+            RenderDetail();
+            RenderBootInfo();
+        }
+        finally
+        {
+            _measure.IsEnabled = true;
+        }
+    }
+
+    /// <summary>Last boot time, the average of the recorded boots, and when the impact was measured.</summary>
+    private void RenderBootInfo()
+    {
+        _bootInfo.Foreground = Ui.B("TextMuted");
+        if (_impact is null)
+        {
+            _bootInfo.Text = "Press BOOT IMPACT to see how long Windows takes to start and what slows it down.";
+            return;
+        }
+        static string S(int ms) => $"{ms / 1000.0:0.#} s";
+        var parts = new List<string>();
+        if (_impact.Boots.FirstOrDefault() is { } last)
+        {
+            parts.Add($"Last boot {S(last.TotalMs)} ({S(last.MainPathMs)} to the desktop + {S(last.PostBootMs)} after it), {last.Time:MMM d}");
+            if (_impact.Boots.Count > 1)
+                parts.Add($"average of last {_impact.Boots.Count}: {S((int)_impact.Boots.Average(b => b.TotalMs))}");
+        }
+        parts.Add(_impact.LogonTime is { } logon ? $"impact from the logon of {logon:MMM d, HH:mm}" : "no logon data yet");
+        _bootInfo.Text = string.Join("  ·  ", parts);
+    }
+
+    private StartupImpact ImpactOf(StartupEntry e) =>
+        e.Category is StartupCategory.Logon or StartupCategory.Tasks ? BootImpact.For(e, _impact, _entryImages).Impact : StartupImpact.NotMeasured;
 
     private static bool SameEntry(StartupEntry a, StartupEntry b) =>
         a.Source == b.Source && a.Name == b.Name && a.Location == b.Location && a.TaskPath == b.TaskPath && a.ServiceName == b.ServiceName;
@@ -294,7 +371,8 @@ internal sealed class StartupHubPage : UserControl, IDisposable
             .ThenByDescending(e => e.Unusual)
             .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        var rows = visible.Select(e => new StartupRow(e)).ToList();
+        _entryImages = _entries.Where(e => e.ImagePath is { Length: > 0 }).Select(e => e.ImagePath!).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var rows = visible.Select(e => new StartupRow(e, ImpactOf(e))).ToList();
         _list.ItemsSource = rows;
         _list.SelectedItem = _selected is null ? null : rows.FirstOrDefault(r => r.Entry == _selected);
 
@@ -315,10 +393,21 @@ internal sealed class StartupHubPage : UserControl, IDisposable
             return;
         }
 
-        var row = new StartupRow(e);
+        var row = new StartupRow(e, ImpactOf(e));
         var name = new TextBlock { Text = e.Name, FontFamily = Ui.Res<FontFamily>("HeadingFont"), FontWeight = FontWeights.Bold, FontSize = 22, Foreground = Ui.B("Text"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 12, 0, 6) };
         var badge = new Border { Background = row.StatusBackground, Padding = new Thickness(8, 3, 8, 3), HorizontalAlignment = HorizontalAlignment.Left, Child = new TextBlock { Text = row.StatusText, Foreground = row.StatusBrush, FontSize = 11, FontWeight = FontWeights.Bold } };
         var stack = Ui.Stack(Ui.PanelTitle("DETAILS"), name, badge);
+
+        if (e.Category is StartupCategory.Logon or StartupCategory.Tasks && _impact is not null)
+        {
+            var (impact, cpu, disk) = BootImpact.For(e, _impact, _entryImages);
+            if (impact is StartupImpact.High or StartupImpact.Medium or StartupImpact.Low)
+                stack.Children.Add(Note($"At the last logon it used {cpu / 1000:0.##} s of CPU and {Hardware.SystemInfo.FormatBytes(disk)} of disk (including what it started). "
+                    + (impact == StartupImpact.High ? "Disabling it makes startup noticeably faster." : impact == StartupImpact.Medium ? "It adds a little to startup." : "It barely affects startup."),
+                    impact == StartupImpact.High ? "Warning" : "Info"));
+            else if (impact == StartupImpact.None && e.Enabled)
+                stack.Children.Add(Note("It did not run at the last logon.", "Info"));
+        }
 
         if (e.Unusual)
             stack.Children.Add(Note("This is not the Windows default. Malware often hides here; check it is something you recognise.", "Danger"));

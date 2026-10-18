@@ -67,7 +67,7 @@ internal sealed class DiskMapPage : UserControl, IDisposable
 
     private static readonly DataTemplate RowTemplate = (DataTemplate)XamlReader.Parse("""
         <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                      xmlns:c="clr-namespace:Durazzno.UI.Controls;assembly=DurazznoAppDaemon">
+                      xmlns:c="clr-namespace:Durazzno.UI.Controls;assembly=DurazznoApp">
             <Grid Height="40">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="30" />
@@ -151,11 +151,14 @@ internal sealed class DiskMapPage : UserControl, IDisposable
         _targetLabel.Margin = new Thickness(0, 0, 14, 0);
         _targetLabel.MaxWidth = 420;
         _targetLabel.TextTrimming = TextTrimming.CharacterEllipsis;
-        var headerActions = Ui.Row(_targetLabel, choose, _scan);
+        var cleanup = new Button { Style = Ui.Res<Style>("SecondaryButton"), Content = IconLabel("trash-2", "CLEANUP", Ui.B("Text")), Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
+        System.Windows.Automation.AutomationProperties.SetName(cleanup, "CLEANUP");
+        cleanup.Click += (_, _) => ShowCleanup();
+        var headerActions = Ui.Row(_targetLabel, cleanup, choose, _scan);
         headerActions.HorizontalAlignment = HorizontalAlignment.Right;
         headerActions.VerticalAlignment = VerticalAlignment.Center;
         var header = new Grid();
-        header.Children.Add(Ui.Row(Ui.IconChip(tool.Icon, _accent, Imaging.Brush(tool.Accent, 0x26), 64, 30), title));
+        header.Children.Add(Ui.Row(Ui.IconChip(tool.Icon, _accent, Imaging.Brush(tool.Accent, 0x26), 64, 52), title));
         header.Children.Add(headerActions);
 
         // List + map ───────────────────────────────────────────────
@@ -397,6 +400,135 @@ internal sealed class DiskMapPage : UserControl, IDisposable
         _target = null;
         RenderDrives();
         ShowIdle();
+    }
+
+    // ── Cleanup ───────────────────────────────────────────────────────────────────────────
+
+    private readonly Dictionary<string, long> _cleanupSizes = [];
+    private bool _cleaning;
+
+    /// <summary>The cleanup view: safe-to-delete categories with their size, cleaned in one go (one UAC prompt for the admin ones).</summary>
+    private void ShowCleanup()
+    {
+        if (_liveTimer.IsEnabled)
+            return; // scanning
+        var intro = Ui.Text("Files that are safe to delete. Files in use are skipped. Categories marked ADMIN ask for permission once for all of them.", "CardHint");
+        intro.Margin = new Thickness(0, 8, 0, 6);
+        intro.TextWrapping = TextWrapping.Wrap;
+        var rows = Ui.Stack(Ui.PanelTitle("CLEANUP"), intro);
+
+        var checks = new List<(CheckBox Box, CleanupCategory Category, TextBlock Size)>();
+        var total = Ui.Text("", "Body", Ui.B("TextMuted"));
+        var status = Ui.Text("", "Body");
+        var clean = new Button { Style = Ui.Res<Style>("PrimaryButton"), Content = IconLabel("trash-2", "CLEAN SELECTED", Ui.B("AccentText")), Padding = new Thickness(22, 8, 22, 8) };
+        var back = new Button { Style = Ui.Res<Style>("SecondaryButton"), Content = IconLabel("chevron-left", "BACK", Ui.B("Text")), Margin = new Thickness(10, 0, 0, 0) };
+        back.Click += (_, _) => { if (!_cleaning) { if (_result is null) ShowIdle(); else { _top.Content = _toolbar; _body.Content = _main; } } };
+
+        void UpdateTotal()
+        {
+            var selected = checks.Where(c => c.Box.IsChecked == true).Sum(c => _cleanupSizes.GetValueOrDefault(c.Category.Id));
+            total.Text = $"Selected: {SystemInfo.FormatBytes(selected)}";
+            clean.IsEnabled = !_cleaning && checks.Any(c => c.Box.IsChecked == true);
+        }
+
+        foreach (var category in CleanupService.All)
+        {
+            var name = new TextBlock { Text = category.Name, FontFamily = Ui.Res<FontFamily>("HeadingFont"), FontWeight = FontWeights.Bold, FontSize = 16, Foreground = Ui.B("Text") };
+            var title = Ui.Row(name);
+            if (category.NeedsAdmin)
+            {
+                var badge = new Border { Background = Ui.B("SelectedBg"), Padding = new Thickness(6, 1, 6, 1), Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+                    Child = Ui.Text("ADMIN", "CardLabel") };
+                title.Children.Add(badge);
+            }
+            var description = Ui.Text(category.Description, "CardHint");
+            description.TextWrapping = TextWrapping.Wrap;
+            var size = new TextBlock { Text = "measuring…", FontFamily = Ui.Res<FontFamily>("HeadingFont"), FontWeight = FontWeights.Bold, FontSize = 16,
+                Foreground = Ui.B("TextMuted"), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16, 0, 0, 0) };
+            var box = new CheckBox { IsChecked = !category.IsRecycleBin, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 14, 0) };
+            box.Checked += (_, _) => UpdateTotal();
+            box.Unchecked += (_, _) => UpdateTotal();
+
+            var row = new Grid { Margin = new Thickness(0, 16, 0, 0) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition());
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.Children.Add(box);
+            row.Children.Add(Ui.Stack(title, description).At(1));
+            row.Children.Add(size.At(2));
+            rows.Children.Add(row);
+            checks.Add((box, category, size));
+        }
+
+        async Task MeasureAll()
+        {
+            foreach (var (_, category, sizeText) in checks)
+            {
+                sizeText.Text = "measuring…";
+                var bytes = await Task.Run(() => CleanupService.Measure(category));
+                _cleanupSizes[category.Id] = bytes;
+                sizeText.Text = SystemInfo.FormatBytes(bytes);
+                sizeText.Foreground = bytes > 0 ? Ui.B("Text") : Ui.B("TextDim");
+                UpdateTotal();
+            }
+        }
+
+        clean.Click += async (_, _) =>
+        {
+            var selected = checks.Where(c => c.Box.IsChecked == true).Select(c => c.Category).ToList();
+            if (selected.Count == 0 || _cleaning)
+                return;
+            _cleaning = true;
+            UpdateTotal();
+            status.Foreground = Ui.B("TextMuted");
+            status.Text = "Cleaning…";
+            long freed = 0;
+            string? error = null;
+            try
+            {
+                foreach (var category in selected.Where(c => !c.NeedsAdmin))
+                    freed += await Task.Run(() => CleanupService.Clean(category));
+                if (selected.Where(c => c.NeedsAdmin).ToList() is { Count: > 0 } admin)
+                {
+                    var (adminFreed, adminError) = await CleanupService.CleanElevatedAsync(admin);
+                    freed += adminFreed;
+                    error = adminError;
+                }
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
+            finally
+            {
+                _cleaning = false;
+            }
+            status.Foreground = error is null ? Ui.B("Success") : Ui.B("Warning");
+            status.Text = $"Freed {SystemInfo.FormatBytes(freed)}." + (error switch
+            {
+                null => "",
+                "Cancelled" => "  The ADMIN categories were skipped (permission was not given).",
+                _ => $"  ADMIN categories: {error}",
+            });
+            Core.Log.Info($"DiskMap cleanup: freed {SystemInfo.FormatBytes(freed)}{(error is null ? "" : $" ({error})")}");
+            RenderDrives();
+            await MeasureAll();
+        };
+
+        var footer = new Grid { Margin = new Thickness(0, 24, 0, 0) };
+        footer.Children.Add(Ui.Stack(total, status));
+        var buttons = Ui.Row(clean, back);
+        buttons.HorizontalAlignment = HorizontalAlignment.Right;
+        buttons.VerticalAlignment = VerticalAlignment.Center;
+        footer.Children.Add(buttons);
+        rows.Children.Add(footer);
+
+        var card = Ui.Card(rows);
+        card.Margin = new Thickness(0, 6, 0, 0);
+        _top.Content = null;
+        _body.Content = card;
+        UpdateTotal();
+        _ = MeasureAll();
     }
 
     private void ShowIdle()

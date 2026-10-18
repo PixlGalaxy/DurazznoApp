@@ -21,6 +21,7 @@ internal sealed partial class MainWindow : Window
     public const string DashboardPage = "dashboard";
     public const string SettingsPage = "settings";
     public const string PowerCutsPage = "powercuts";
+    public const string AppsPage = "apps";
 
     private readonly AppController _app;
     private readonly Dictionary<string, RadioButton> _navItems = new();
@@ -32,6 +33,7 @@ internal sealed partial class MainWindow : Window
     {
         _app = app;
         InitializeComponent();
+        Controls.WheelScroll.AttachPage(PageScroller); // proportional wheel / trackpad scrolling for every page
 
         var logo = Imaging.ToBitmapSource(IconFactory.Logo(app.Settings.Current.Logo));
         BrandLogo.Source = logo;
@@ -141,7 +143,7 @@ internal sealed partial class MainWindow : Window
         "timerresolution" => new TimerResolutionPage(_app, ToolCatalog.Find("timerresolution")!),
         "driverhub" => new DriverHubPage(_app, ToolCatalog.Find("driverhub")!),
         PowerCutsPage => new PowerCutsPage(_app),
-        _ when ToolCatalog.Find(page) is { External: false } tool => new ToolPage(_app, tool),
+        AppsPage => new Pages.AppsPage(_app),
         _ => null,
     };
 
@@ -151,25 +153,12 @@ internal sealed partial class MainWindow : Window
         AddNavItem(DashboardPage, "Dashboard", "layout-dashboard", "#F5C400");
 
         AddSection("TOOLS");
-        foreach (var tool in ToolCatalog.All.Where(t => !t.External))
+        foreach (var tool in ToolCatalog.All)
             AddNavItem(tool.Id, tool.Name, tool.Icon, tool.Accent);
         AddNavItem(PowerCutsPage, Plugins.PowerCutsService.Name, "img:Plugins.powercuts", Plugins.PowerCutsService.Accent);
 
-        var launchers = ToolCatalog.All.Where(t => t.External && t.IsInstalled).ToList();
-        if (launchers.Count > 0)
-        {
-            AddSection("LAUNCHERS");
-            foreach (var tool in launchers)
-            {
-                var button = new Button { Content = tool.Name, Tag = tool.Icon, Foreground = Imaging.Brush(tool.Accent), Style = (Style)FindResource("NavAction") };
-                button.Click += (_, _) =>
-                {
-                    if (Launcher.Start(tool) is { } error)
-                        _app.Notify(tool.Name, error, System.Windows.Forms.ToolTipIcon.Error);
-                };
-                NavPanel.Children.Add(button);
-            }
-        }
+        AddSection("APPS");
+        AddNavItem(AppsPage, "Apps", "package", Pages.AppsPage.Accent);
 
     }
 
