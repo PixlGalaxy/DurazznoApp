@@ -24,7 +24,7 @@ internal sealed class PowerCutsPage : UserControl, IDisposable
     private readonly ContentControl _progress = new() { Focusable = false, Margin = new Thickness(0, 18, 0, 0) };
     private readonly RadioButton _shutdown;
     private readonly RadioButton _restart;
-    private readonly Stepper _hours = new("HOURS", 9999);
+    private readonly Stepper _hours = new("HOURS", 60);
     private readonly Stepper _minutes = new("MINUTES", 59);
     private readonly Stepper _seconds = new("SECONDS", 59);
     private readonly Button _start;
@@ -186,11 +186,14 @@ internal sealed class PowerCutsPage : UserControl, IDisposable
         new LucideIcon { Icon = icon, Width = 16, Height = 16, Foreground = foreground },
         new TextBlock { Text = text, Margin = new Thickness(10, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
 
-    /// <summary>Label + value with − / + buttons (mouse wheel works too).</summary>
+    /// <summary>
+    /// Label + value with − / + buttons. The value can also be typed (digits only, kept within 0..max), changed with the
+    /// mouse wheel or the ↑ / ↓ keys.
+    /// </summary>
     private sealed class Stepper : StackPanel
     {
         private readonly int _max;
-        private readonly TextBlock _value;
+        private readonly TextBox _value;
         private int _current;
 
         public Stepper(string label, int max)
@@ -198,16 +201,55 @@ internal sealed class PowerCutsPage : UserControl, IDisposable
             _max = max;
             Margin = new Thickness(0, 0, 14, 0);
 
-            _value = new TextBlock
+            _value = new TextBox
             {
+                Style = new Style(typeof(TextBox)), // not the app's search box style
                 Width = 64,
                 TextAlignment = TextAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
+                VerticalContentAlignment = VerticalAlignment.Center,
                 FontFamily = Ui.Res<FontFamily>("HeadingFont"),
                 FontWeight = FontWeights.Bold,
                 FontSize = 24,
                 Foreground = Ui.B("Text"),
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                CaretBrush = Ui.B("Accent"),
+                SelectionBrush = Ui.B("Accent"),
+                MaxLength = max.ToString().Length,
                 Text = "0",
+            };
+            System.Windows.Input.InputMethod.SetIsInputMethodEnabled(_value, false);
+            _value.PreviewTextInput += (_, e) => e.Handled = !e.Text.All(char.IsDigit);
+            System.Windows.DataObject.AddPastingHandler(_value, (_, e) =>
+            {
+                if (e.DataObject.GetData(typeof(string)) is not string text || !text.All(char.IsDigit))
+                    e.CancelCommand();
+            });
+            _value.TextChanged += (_, _) =>
+            {
+                if (_value.Text.Length == 0)
+                    return; // being typed; becomes 0 when focus leaves
+                if (int.TryParse(_value.Text, out var typed))
+                    Value = typed;
+            };
+            _value.LostKeyboardFocus += (_, _) => _value.Text = _current.ToString();
+            _value.GotKeyboardFocus += (_, _) => _value.SelectAll();
+            _value.PreviewMouseLeftButtonDown += (_, e) =>
+            {
+                if (_value.IsKeyboardFocusWithin)
+                    return;
+                e.Handled = true; // first click selects the whole value, ready to type over
+                _value.Focus();
+            };
+            _value.PreviewKeyDown += (_, e) =>
+            {
+                switch (e.Key)
+                {
+                    case System.Windows.Input.Key.Up: Value++; _value.SelectAll(); e.Handled = true; break;
+                    case System.Windows.Input.Key.Down: Value--; _value.SelectAll(); e.Handled = true; break;
+                    case System.Windows.Input.Key.Enter: System.Windows.Input.Keyboard.ClearFocus(); e.Handled = true; break;
+                }
             };
 
             var minus = Small("minus", -1);
@@ -238,7 +280,11 @@ internal sealed class PowerCutsPage : UserControl, IDisposable
                 if (v == _current && _value.Text == v.ToString())
                     return;
                 _current = v;
-                _value.Text = v.ToString();
+                if (_value.Text != v.ToString())
+                {
+                    _value.Text = v.ToString(); // typed past the max (or a leading 0): show what counts
+                    _value.CaretIndex = _value.Text.Length;
+                }
                 Changed?.Invoke(this, EventArgs.Empty);
             }
         }
