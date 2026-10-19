@@ -20,7 +20,12 @@ internal sealed class AppEntry
     public string? Icon { get; init; }
     public string? Message { get; init; }
     public string? Description { get; init; }
-    public string? Version { get; init; }
+
+    /// <summary>
+    /// The version as text ("1.2"), or a link to a text file that holds it (e.g. AppVersion.txt next to the exe, so the
+    /// app's own release script can bump it without re-signing the catalog). Links are read when the catalog loads.
+    /// </summary>
+    public string? Version { get; set; }
     /// <summary>
     /// How the download is checked: a SHA-256 (64 hex characters), a link or file name of a text file that contains it
     /// (e.g. AppHash.txt next to the exe), or empty / missing for no check.
@@ -31,6 +36,12 @@ internal sealed class AppEntry
     /// <summary>Command-line arguments used when Durazzno opens the downloaded file.</summary>
     public string? Arguments { get; init; }
 
+    /// <summary>Put a shortcut to the downloaded file on the Desktop (for apps with a window).</summary>
+    public bool DesktopShortcut { get; init; }
+
+    /// <summary>Put a shortcut to the downloaded file in the Start Menu (Programs).</summary>
+    public bool StartMenuShortcut { get; init; }
+
     [JsonIgnore]
     public string Key => string.IsNullOrWhiteSpace(Id) ? Name : Id;
 }
@@ -40,8 +51,12 @@ internal sealed class AppsDocument
     public List<AppEntry> Apps { get; init; } = [];
 }
 
-/// <summary>An app Durazzno downloaded, listed in apps\apps-installed.json next to the app.</summary>
-internal sealed record InstalledApp(string Key, string Name, string? Version, string FilePath, string? IconPath, string? Arguments, DateTime Installed);
+/// <summary>
+/// An app Durazzno downloaded, listed in apps\apps-installed.json next to the app. Shortcuts are the .lnk files Durazzno
+/// created for it, removed with the app.
+/// </summary>
+internal sealed record InstalledApp(string Key, string Name, string? Version, string FilePath, string? IconPath, string? Arguments, DateTime Installed,
+    List<string>? Shortcuts = null);
 
 internal sealed record AppDownloadProgress(double? Percent);
 
@@ -77,7 +92,47 @@ internal static class AppCatalog
     {
         var bytes = await ServerClient.GetSignedAsync(CatalogUri, "apps catalog", ct);
         var doc = JsonSerializer.Deserialize<AppsDocument>(bytes, Json) ?? new AppsDocument();
-        return doc.Apps.Where(a => !string.IsNullOrWhiteSpace(a.Name) && !string.IsNullOrWhiteSpace(a.Url)).ToList();
+        var apps = doc.Apps.Where(a => !string.IsNullOrWhiteSpace(a.Name) && !string.IsNullOrWhiteSpace(a.Url)).ToList();
+        await Task.WhenAll(apps.Where(a => IsLink(a.Version)).Select(async a => a.Version = await ReadVersionAsync(a, ct)));
+        return apps;
+    }
+
+    private static readonly Dictionary<string, (string? Version, DateTime Read)> VersionCache = [];
+
+    private static bool IsLink(string? value) =>
+        Uri.TryCreate(value?.Trim(), UriKind.Absolute, out var uri) && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    /// <summary>
+    /// The first line of the version file an entry links to. Kept for a minute (the catalog reloads every 10 s); when
+    /// the file cannot be read, the last known version is used, or none (no update offered).
+    /// </summary>
+    private static async Task<string?> ReadVersionAsync(AppEntry app, CancellationToken ct)
+    {
+        var link = app.Version!.Trim();
+        lock (VersionCache)
+        {
+            if (VersionCache.TryGetValue(link, out var cached) && DateTime.Now - cached.Read < TimeSpan.FromMinutes(1))
+                return cached.Version;
+        }
+        string? version;
+        try
+        {
+            var (source, _) = await ServerClient.OpenReadAsync(Resolve(link), ct);
+            await using (source)
+            using (var reader = new StreamReader(source))
+                version = (await reader.ReadToEndAsync(ct)).Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0);
+            if (version is { Length: > 32 })
+                version = version[..32]; // not a version file
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Warn($"Apps: version of {app.Name}: {ex.Message}");
+            lock (VersionCache)
+                return VersionCache.TryGetValue(link, out var stale) ? stale.Version : null;
+        }
+        lock (VersionCache)
+            VersionCache[link] = (version, DateTime.Now);
+        return version;
     }
 
     public static Uri Resolve(string urlOrFile) => WebinCloud.Sibling(CatalogUri, urlOrFile);
@@ -148,7 +203,11 @@ internal static class AppCatalog
         }
 
         var icon = await DownloadIconAsync(app, ct);
-        var installed = new InstalledApp(app.Key, app.Name, app.Version, target, icon, app.Arguments, DateTime.Now);
+        // An update re-creates the shortcuts: the file name or the catalog's choice may have changed.
+        if (Installed().FirstOrDefault(a => a.Key == app.Key) is { } previous)
+            RemoveShortcuts(previous);
+        var shortcuts = CreateShortcuts(app, target, icon);
+        var installed = new InstalledApp(app.Key, app.Name, app.Version, target, icon, app.Arguments, DateTime.Now, shortcuts);
         lock (Gate)
         {
             var list = Installed().Where(a => a.Key != app.Key).Append(installed).ToList();
@@ -252,10 +311,105 @@ internal static class AppCatalog
             {
                 throw new AppInUseException(app.Name, ex); // a file in it is open: keep the entry, nothing half-removed
             }
+            RemoveShortcuts(app);
             var list = Installed().Where(a => a.Key != app.Key).ToList();
             File.WriteAllText(InstalledFile, JsonSerializer.Serialize(list, Json));
         }
         Log.Info($"Apps: removed {app.Name}");
+    }
+
+    /// <summary>
+    /// Desktop / Start Menu shortcuts the catalog asks for ("desktopShortcut", "startMenuShortcut"). A shortcut with the
+    /// same name that points somewhere else belongs to the user and is left alone.
+    /// </summary>
+    private static List<string> CreateShortcuts(AppEntry app, string target, string? iconImage)
+    {
+        var created = new List<string>();
+        var folders = new List<string>();
+        if (app.DesktopShortcut)
+            folders.Add(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
+        if (app.StartMenuShortcut)
+            folders.Add(Environment.GetFolderPath(Environment.SpecialFolder.Programs));
+        if (folders.Count == 0)
+            return created;
+
+        var icon = ShortcutIcon(target, iconImage);
+        foreach (var folder in folders.Where(f => !string.IsNullOrEmpty(f)))
+        {
+            var lnk = Path.Combine(folder, Safe(app.Name) + ".lnk");
+            if (File.Exists(lnk) && !IsOurs(lnk))
+            {
+                Log.Info($"Apps: {lnk} already exists and is not Durazzno's, left as is");
+                continue;
+            }
+            if (Durazzno.Startup.Shortcut.Create(lnk, target, app.Arguments ?? "", Path.GetDirectoryName(target)!, icon, app.Description))
+                created.Add(lnk);
+        }
+        return created;
+    }
+
+    private static void RemoveShortcuts(InstalledApp app)
+    {
+        foreach (var lnk in app.Shortcuts ?? [])
+        {
+            try
+            {
+                if (File.Exists(lnk) && IsOurs(lnk))
+                    File.Delete(lnk);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Warn($"Apps: could not delete {lnk}: {ex.Message}");
+            }
+        }
+    }
+
+    // A shortcut Durazzno made points into apps\.
+    private static bool IsOurs(string lnk)
+    {
+        var (target, _) = Durazzno.Startup.Shortcut.Resolve(lnk);
+        return Path.GetFullPath(target).StartsWith(Path.GetFullPath(AppsDir) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Icon for a shortcut: an exe keeps its own; anything else (a script, a document) gets the catalog icon as an .ico
+    /// next to the file. Null means the target's default icon.
+    /// </summary>
+    private static string? ShortcutIcon(string target, string? image)
+    {
+        if (image is null || Path.GetExtension(target).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+            return null;
+        try
+        {
+            using var source = System.Drawing.Image.FromFile(image);
+            var size = Math.Min(256, Math.Max(source.Width, source.Height));
+            var scale = (double)size / Math.Max(source.Width, source.Height);
+            int w = (int)Math.Round(source.Width * scale), h = (int)Math.Round(source.Height * scale);
+            using var bitmap = new System.Drawing.Bitmap(size, size);
+            using (var g = System.Drawing.Graphics.FromImage(bitmap))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.DrawImage(source, (size - w) / 2, (size - h) / 2, w, h);
+            }
+            using var png = new MemoryStream();
+            bitmap.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+
+            // An .ico with one PNG frame (supported since Windows Vista).
+            var path = Path.Combine(Path.GetDirectoryName(target)!, ".shortcut.ico");
+            using var writer = new BinaryWriter(File.Create(path));
+            writer.Write((short)0); writer.Write((short)1); writer.Write((short)1);  // header: icon, 1 image
+            var side = (byte)(size >= 256 ? 0 : size);                               // 0 means 256
+            writer.Write(side); writer.Write(side); writer.Write((byte)0); writer.Write((byte)0);
+            writer.Write((short)1); writer.Write((short)32);                         // planes, bits per pixel
+            writer.Write((int)png.Length); writer.Write(22);                         // size, offset after the 22-byte header
+            writer.Write(png.ToArray());
+            return path;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Apps: shortcut icon for {target}: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>True while the file is open by another process (the app is running).</summary>

@@ -521,9 +521,36 @@ internal static class CommandLine
     }
 }
 
-/// <summary>Reads .lnk targets through the Windows Script Host COM object.</summary>
+/// <summary>Reads and writes .lnk files through the Windows Script Host COM object.</summary>
 internal static class Shortcut
 {
+    /// <summary>Creates (or overwrites) a shortcut. Returns false when it could not be written.</summary>
+    public static bool Create(string lnk, string target, string arguments, string workingDirectory, string? icon, string? description)
+    {
+        try
+        {
+            var type = Type.GetTypeFromProgID("WScript.Shell");
+            if (type is null)
+                return false;
+            dynamic shell = Activator.CreateInstance(type)!;
+            dynamic link = shell.CreateShortcut(lnk);
+            link.TargetPath = target;
+            link.Arguments = arguments;
+            link.WorkingDirectory = workingDirectory;
+            if (!string.IsNullOrEmpty(icon))
+                link.IconLocation = icon + ",0";
+            if (!string.IsNullOrEmpty(description))
+                link.Description = description;
+            link.Save();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Shortcut {lnk}: {ex.Message}");
+            return false;
+        }
+    }
+
     public static (string Target, string Arguments) Resolve(string lnk)
     {
         try
