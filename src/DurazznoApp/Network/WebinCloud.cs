@@ -62,7 +62,7 @@ internal static class WebinCloud
     {
         if (string.IsNullOrWhiteSpace(configured))
             return DefaultManifestUri;
-        var raw = configured.Trim();
+        var raw = configured!.Trim(); // not null here (.NET Framework's IsNullOrWhiteSpace has no annotation)
         if (Uri.TryCreate(raw, UriKind.Absolute, out var uri))
             return !uri.IsFile && uri.AbsolutePath.Trim('/').Length == 0 && uri.Query.Length == 0
                 ? FileUri(MainPath, ManifestFile, raw)

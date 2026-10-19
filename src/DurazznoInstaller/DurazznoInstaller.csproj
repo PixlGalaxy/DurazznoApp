@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <!-- .NET Framework 4.8 ships with Windows 10 and 11: the installer is one small exe with nothing to install first. -->
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <ApplicationIcon>..\DurazznoApp\Assets\Logos\durazzno_icon.ico</ApplicationIcon>
+    <AssemblyName>DurazznoAppInstaller</AssemblyName>
+    <AssemblyTitle>Durazzno App Installer</AssemblyTitle>
+    <RootNamespace>Durazzno.Installer</RootNamespace>
+    <Version>1.0.0</Version>
+    <Product>Durazzno App Installer</Product>
+    <Company>Galaxy Apps</Company>
+    <Copyright>Galaxy Apps</Copyright>
+    <DebugType>embedded</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- The WPF SDK drops these from the implicit usings; the shared files need them. -->
+  <ItemGroup>
+    <Using Include="System.IO" />
+    <Using Include="System.Net.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+
+  <!-- Shared with Durazzno App: the server (one place to change it), the update signing key and the card shape. -->
+  <ItemGroup>
+    <Compile Include="..\DurazznoApp\Network\WebinCloud.cs" Link="Shared\WebinCloud.cs" />
+    <Compile Include="..\DurazznoApp\Updates\UpdateSignature.cs" Link="Shared\UpdateSignature.cs" />
+    <Compile Include="..\DurazznoApp\UI\Controls\ChamferBorder.cs" Link="Shared\ChamferBorder.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="..\DurazznoApp\Assets\Fonts\Rajdhani-Bold.ttf;..\DurazznoApp\Assets\Fonts\Rajdhani-SemiBold.ttf;..\DurazznoApp\Assets\Fonts\Rajdhani-Medium.ttf;..\DurazznoApp\Assets\Fonts\RaceSpace.otf"
+              Link="Assets\Fonts\%(Filename)%(Extension)" />
+    <Resource Include="..\DurazznoApp\Assets\Logos\durazzno_icon.ico" Link="Assets\durazzno_icon.ico" />
+    <Resource Include="..\DurazznoApp\Assets\Plugins\webincloud.png" Link="Assets\webincloud.png" />
+  </ItemGroup>
+
+</Project>
