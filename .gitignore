@@ -3,6 +3,8 @@
 # Build output
 bin/
 obj/
+# ...but not the DiskSpd binary DiskMark embeds (Assets/Bin matches "bin/" on Windows)
+!/src/DurazznoApp/Assets/Bin/
 /dist/
 *.user
 .vs/
@@ -21,3 +23,8 @@ obj/
 
 # Webin Cloud publishing notes (local only)
 /webincloud/
+
+# Legacy (Cerberus) bridge to migrate the old Python app (local only)
+/scripts/legacy-bridge/
+/scripts/publish-legacy-bridge.ps1
+/HANDOFF.md
