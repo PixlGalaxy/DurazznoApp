@@ -22,7 +22,7 @@ internal sealed record DriverSearchResult(
 /// </summary>
 internal static class DriverSearch
 {
-    public static async Task<DriverSearchResult> RunAsync(List<DeviceInfo> allDevices, IProgress<(int Done, int Total)>? catalogProgress,
+    public static async Task<DriverSearchResult> RunAsync(List<DeviceInfo> allDevices, IProgress<(int Done, int Total, string? Device)>? catalogProgress,
         Action? windowsUpdateFinished, CancellationToken ct)
     {
         var devices = allDevices.Where(d => d.IsPresent).ToList(); // unused (not connected) devices get no updates

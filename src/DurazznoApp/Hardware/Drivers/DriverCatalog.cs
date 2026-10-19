@@ -73,8 +73,11 @@ internal static partial class DriverCatalog
         "Volume", "VolumeSnapshot", "AudioEndpoint", "PrintQueue", "LegacyDriver", "Computer", "Processor",
     };
 
-    /// <summary>Looks every device up in the catalog. Returns at most one (the newest valid) offer per device.</summary>
-    public static async Task<List<DriverUpdate>> SearchAsync(IReadOnlyList<DeviceInfo> devices, IProgress<(int Done, int Total)>? progress, CancellationToken ct)
+    /// <summary>
+    /// Looks every device up in the catalog. Returns at most one (the newest valid) offer per device. Progress gives the
+    /// devices done so far and the name of the last one looked up.
+    /// </summary>
+    public static async Task<List<DriverUpdate>> SearchAsync(IReadOnlyList<DeviceInfo> devices, IProgress<(int Done, int Total, string? Device)>? progress, CancellationToken ct)
     {
         Searches.Clear();
         _asked = _answered = 0;
@@ -82,7 +85,7 @@ internal static partial class DriverCatalog
         var results = new ConcurrentBag<DriverUpdate>();
         var gate = new SemaphoreSlim(MaxParallel);
         var done = 0;
-        progress?.Report((0, targets.Count));
+        progress?.Report((0, targets.Count, null));
 
         await Task.WhenAll(targets.Select(async device =>
         {
@@ -101,7 +104,7 @@ internal static partial class DriverCatalog
             }
             finally
             {
-                progress?.Report((Interlocked.Increment(ref done), targets.Count));
+                progress?.Report((Interlocked.Increment(ref done), targets.Count, device.Name));
             }
         }));
 

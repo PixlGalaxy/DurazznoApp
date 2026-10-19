@@ -427,18 +427,23 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         try
         {
             var finished = false; // Progress<T> callbacks are posted, so late ones must not overwrite the final message
-            var catalogProgress = (Done: 0, Total: 0);
+            var catalogProgress = (Done: 0, Total: 0, Device: (string?)null);
+            var windowsUpdateDone = false;
             void Report()
             {
-                if (!finished)
-                    _status.Text = catalogProgress.Total > 0
-                        ? $"Checking for driver updates… {catalogProgress.Done * 100 / catalogProgress.Total}%"
-                        : "Checking for driver updates…";
+                if (finished)
+                    return;
+                // The percentage is the catalog's device-by-device lookup; Windows Update and the makers run alongside.
+                var catalogDone = catalogProgress.Total > 0 && catalogProgress.Done >= catalogProgress.Total;
+                _status.Text = catalogDone && !windowsUpdateDone ? "Checking for driver updates…  ·  waiting for Windows Update"
+                    : catalogProgress.Total == 0 ? "Checking for driver updates…"
+                    : $"Checking for driver updates… {catalogProgress.Done * 100 / catalogProgress.Total}%"
+                      + (catalogProgress.Device is { } device && !catalogDone ? $"  ·  Microsoft Update Catalog: {device}" : "");
             }
             Report();
 
-            var result = await DriverSearch.RunAsync(_devices, new Progress<(int Done, int Total)>(p => { catalogProgress = p; Report(); }),
-                null, CancellationToken.None);
+            var result = await DriverSearch.RunAsync(_devices, new Progress<(int Done, int Total, string? Device)>(p => { catalogProgress = p; Report(); }),
+                () => Dispatcher.BeginInvoke(() => { windowsUpdateDone = true; Report(); }), CancellationToken.None);
             finished = true;
             _updates = result.Offers;
             ApplyHidden();
