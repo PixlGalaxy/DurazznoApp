@@ -30,9 +30,6 @@ internal sealed class AppController : IDisposable
     private bool _quietCheck;
     private string? _announcedUpdate;
     private Task? _staging;
-    private bool _unsupportedAnnounced;
-    private bool _wasOnline;
-    private bool _offlineAnnounced;
     private Action? _balloonClick;
 
     private readonly SynchronizationContext _ui = SynchronizationContext.Current!;
@@ -331,26 +328,12 @@ internal sealed class AppController : IDisposable
         OnStatusChanged();
 
         var manifest = Connection.Manifest;
+        // Offline is shown by the tray icon's orange dot, not a notification (a laptop waking up before its Wi-Fi
+        // connects would get one every time).
         if (manifest is null)
-        {
-            // Asked for, or the server just went away (once per session, so a flaky network does not spam).
-            if (!quiet && (userInitiated || (_wasOnline && !_offlineAnnounced)))
-            {
-                _offlineAnnounced |= !userInitiated;
-                Notify("Connection problem", ConnectionDescription(), ToolTipIcon.Warning, NotifyLogo.WebinCloud);
-            }
-            _wasOnline = false;
             return;
-        }
-        _wasOnline = true;
         if (manifest.App.Version == AppInfo.VersionText || manifest.IsAppNewer)
             UpdateService.SaveNotes(manifest.App); // What's new (Settings) for this version or the next one
-
-        if (!manifest.IsCurrentVersionSupported && !_unsupportedAnnounced)
-        {
-            _unsupportedAnnounced = true;
-            Notify("Version no longer supported", $"Durazzno App {AppInfo.VersionText} is no longer supported. Please update.", ToolTipIcon.Warning);
-        }
 
         if (!manifest.HasUpdate)
         {
@@ -394,11 +377,11 @@ internal sealed class AppController : IDisposable
         var manifest = Connection.Manifest;
 
         // The logo always stays; a coloured dot carries the status:
-        // orange = offline, blue = update available / installing, red = unsupported version.
+        // red = no internet, orange = internet but Webin Cloud Server is offline, blue = update available / installing.
         var offline = Connection.State is ConnectionState.NoInternet or ConnectionState.ServerUnreachable;
-        Color? badge = offline ? TrayTheme.OfflineBadge
+        Color? badge = Connection.State == ConnectionState.NoInternet ? TrayTheme.Danger
+            : Connection.State == ConnectionState.ServerUnreachable ? TrayTheme.OfflineBadge
             : IsInstalling || manifest is { HasUpdate: true } ? TrayTheme.Info
-            : manifest is { IsCurrentVersionSupported: false } ? TrayTheme.Danger
             : null;
         var icon = IconFactory.TrayIcon(IconFactory.Logo(settings.Logo), badge);
         var status = offline ? ConnectionDescription()
@@ -445,7 +428,6 @@ internal sealed class AppController : IDisposable
 
         var state = Connection.State;
         var manifest = Connection.Manifest;
-        var hasInternet = state != ConnectionState.NoInternet;
 
         // Version and connection status live in Settings → Updates (and the tray tooltip), not in the menu.
         Add("Open Durazzno App", MenuIcon("app-window", TrayTheme.Info), () => ShowMainWindow(), bold: true);
@@ -463,7 +445,10 @@ internal sealed class AppController : IDisposable
         foreach (var tool in ToolCatalog.All)
             Add(tool.Name, MenuIcon(tool.Icon, ColorTranslator.FromHtml(tool.Accent)), () => ShowMainWindow(tool.Id));
 
-        Add(PowerCutsService.Name, IconFactory.Embedded("Plugins.powercuts", iconSize), () => ShowMainWindow(MainWindow.PowerCutsPage));
+        Add(PowerCutsService.Name, settings.IconStyle == IconStyle.Colorful
+                ? IconFactory.Embedded("Plugins.powercuts", iconSize)
+                : IconFactory.EmbeddedTinted("Plugins.powercuts", iconSize, palette.Text),
+            () => ShowMainWindow(MainWindow.PowerCutsPage));
         if (PowerCuts.IsActive)
         {
             var verb = PowerCuts.Action == PowerAction.Restart ? "Restart" : "Shutdown";
@@ -472,7 +457,6 @@ internal sealed class AppController : IDisposable
 
         _menu.Items.Add(new ToolStripSeparator());
 
-        Add("ItzGalaxy Website", MenuIcon("globe", TrayTheme.Info), () => Launcher.OpenUrl(AppInfo.WebsiteUrl), enabled: hasInternet);
         Add("Settings", MenuIcon("settings", TrayTheme.Neutral), () => ShowMainWindow(MainWindow.SettingsPage));
         Add("Exit", MenuIcon("power", TrayTheme.Danger), Exit);
     }

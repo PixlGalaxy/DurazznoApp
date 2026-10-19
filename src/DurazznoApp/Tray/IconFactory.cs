@@ -53,6 +53,38 @@ internal static class IconFactory
         return bitmap;
     }
 
+    /// <summary>
+    /// An embedded PNG in one color, keeping its shape (alpha): the Monochrome menu icons for the ones that are not
+    /// Lucide outlines (PowerCuts). Cached.
+    /// </summary>
+    public static Bitmap EmbeddedTinted(string name, int size, Color color)
+    {
+        var key = $"{name}@{size}#{color.ToArgb():X8}";
+        if (LogoCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var source = Embedded(name, size);
+        var bitmap = new Bitmap(size, size, PixelFormat.Format32bppArgb);
+        // Every pixel becomes the color; only its transparency is kept.
+        var matrix = new ColorMatrix(
+        [
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, 0, 0],
+            [0, 0, 0, color.A / 255f, 0],
+            [color.R / 255f, color.G / 255f, color.B / 255f, 0, 1],
+        ]);
+        using (var attributes = new ImageAttributes())
+        using (var g = Graphics.FromImage(bitmap))
+        {
+            attributes.SetColorMatrix(matrix);
+            g.DrawImage(source, new Rectangle(0, 0, size, size), 0, 0, size, size, GraphicsUnit.Pixel, attributes);
+        }
+
+        LogoCache[key] = bitmap;
+        return bitmap;
+    }
+
     /// <summary>Full-resolution logo (transparent background). Cached; do not dispose the result.</summary>
     public static Bitmap Logo(LogoKind kind)
     {

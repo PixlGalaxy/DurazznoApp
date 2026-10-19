@@ -10,9 +10,6 @@ internal sealed class UpdateManifest
 {
     public PackageInfo App { get; init; } = null!;
 
-    /// <summary>Versions below this are flagged as unsupported in the menu.</summary>
-    public string? MinimumSupportedVersion { get; init; }
-
     [JsonIgnore]
     public Uri Source { get; set; } = null!;
 
@@ -23,9 +20,6 @@ internal sealed class UpdateManifest
 
     public bool HasUpdate => IsAppNewer;
 
-    public bool IsCurrentVersionSupported =>
-        MinimumSupportedVersion is null || AppInfo.Version >= AppInfo.Normalize(Version.Parse(MinimumSupportedVersion));
-
     public Uri Resolve(PackageInfo package) => Network.WebinCloud.Sibling(Source, package.Url);
 
     public void Validate()
@@ -34,9 +28,6 @@ internal sealed class UpdateManifest
             throw new InvalidDataException("Manifest has no \"app\" entry.");
 
         App.Validate("app", requireSemVer: true);
-
-        if (MinimumSupportedVersion is not null && !Version.TryParse(MinimumSupportedVersion, out _))
-            throw new InvalidDataException("\"minimumSupportedVersion\" is not a version.");
     }
 }
 

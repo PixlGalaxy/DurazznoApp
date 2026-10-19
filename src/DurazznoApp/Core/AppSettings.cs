@@ -15,7 +15,7 @@ internal enum UiSize { Compact, Normal, Large }
 internal sealed class AppSettings
 {
     public IconStyle IconStyle { get; set; } = IconStyle.Colorful;
-    public MenuTheme Theme { get; set; } = MenuTheme.System;
+    public MenuTheme Theme { get; set; } = MenuTheme.Dark;
     public LogoKind Logo { get; set; } = LogoKind.Durazzno;
     public bool AutoUpdate { get; set; } = true;
     public UiSize UiSize { get; set; } = UiSize.Compact;

@@ -14,12 +14,11 @@
 
 .EXAMPLE
     .\scripts\publish-main.ps1
-    .\scripts\publish-main.ps1 -Version 3.0.1 -Notes "Fixes offline icon" -MinimumSupportedVersion 3.0.0
+    .\scripts\publish-main.ps1 -Version 3.0.1 -Notes "Fixes offline icon"
     (without -Notes, scripts\release-notes\<version>.txt is used when it exists)
 #>
 param(
     [string]$Version,
-    [string]$MinimumSupportedVersion,
     [string]$Notes
 )
 
@@ -62,7 +61,6 @@ $manifest = [ordered]@{
 $notesFile = Join-Path $PSScriptRoot "release-notes\$Version.txt"
 if (-not $Notes -and (Test-Path $notesFile)) { $Notes = (Get-Content $notesFile -Raw -Encoding UTF8).Trim() }
 if ($Notes) { $manifest.app.notes = $Notes }
-if ($MinimumSupportedVersion) { $manifest.minimumSupportedVersion = $MinimumSupportedVersion }
 
 $manifestPath = Join-Path $serverOut 'manifest.json'
 [System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 5), $utf8)

@@ -150,8 +150,7 @@ internal sealed class SettingsPage : UserControl, IDisposable
             : m is null ? "Unknown while offline"
             : m.IsAppNewer && _app.IsUpdateReady ? $"{m.App.Version}  (downloaded, installs on next start)"
             : m.IsAppNewer ? $"{m.App.Version}  (update available)"
-            : m.IsCurrentVersionSupported ? $"{m.App.Version}  (up to date)"
-            : $"{m.App.Version}  (this version is no longer supported)";
+            : $"{m.App.Version}  (up to date)";
 
         // What's new: the next version's notes when one is available, otherwise the installed version's.
         var notes = m is { IsAppNewer: true } ? m.App.Notes
