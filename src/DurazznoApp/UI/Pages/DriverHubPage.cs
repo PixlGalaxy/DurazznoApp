@@ -182,10 +182,15 @@ internal sealed class DriverHubPage : UserControl, IDisposable
     private List<DriverBackup>? _backups;
     private readonly Dictionary<string, DriverUpdate> _hidden = new(StringComparer.OrdinalIgnoreCase); // device ID → hidden offer
     private readonly HashSet<string> _skipped = new(StringComparer.OrdinalIgnoreCase);                // update IDs skipped until next check
+    private readonly Dictionary<string, PendingDriver> _pending = new(StringComparer.OrdinalIgnoreCase); // device ID → installed, waiting for a restart
+    private List<PendingDriver> _pendingList = [];
+    private readonly Border _restartBanner = new() { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 12, 0, 0), Padding = new Thickness(14, 10, 10, 10) };
+    private readonly TextBlock _restartText = Ui.Text("", "Body");
     private List<DriverUpdate>? _updates;
     private Filter _filter = Filter.All;
     private DeviceInfo? _selected;
     private bool _busy;
+    private bool _checking; // Check for updates is running
     private double _actionsWidth;
 
     /// <summary>Install progress per update ID (kept until the next check, so errors stay visible).</summary>
@@ -346,7 +351,22 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         main.Children.Add(Ui.Card(Ui.Stack(_listTitle, _list)).At(0));
         main.Children.Add(Ui.Card(_detail).At(2));
 
-        Content = Ui.Stack(header, filterRow, _summary, _status, main);
+        // "Restart Windows to finish N drivers": installs that wait for a restart (PendingRestart).
+        _restartBanner.Background = Ui.B("WarningChip");
+        _restartText.Foreground = Ui.B("Warning");
+        _restartText.TextWrapping = TextWrapping.Wrap;
+        _restartText.VerticalAlignment = VerticalAlignment.Center;
+        var restartNow = Action("power", "RESTART NOW", "SecondaryButton", () => { RestartWindows(); return Task.CompletedTask; });
+        restartNow.Margin = new Thickness(16, 0, 0, 0);
+        var bannerGrid = new Grid();
+        bannerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        bannerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        bannerGrid.Children.Add(_restartText);
+        Grid.SetColumn(restartNow, 1);
+        bannerGrid.Children.Add(restartNow);
+        _restartBanner.Child = bannerGrid;
+
+        Content = Ui.Stack(header, filterRow, _summary, _status, _restartBanner, main);
         Loaded += (_, _) => ReportMinWidth();
 
         IsVisibleChanged += async (_, _) =>
@@ -396,9 +416,11 @@ internal sealed class DriverHubPage : UserControl, IDisposable
             return;
 
         _busy = true;
+        _checking = true;
         _check.IsEnabled = false;
         _progress.Clear();
         _skipped.Clear(); // "skip until next check" ends here
+        RenderList();
         _status.Foreground = Ui.B("Info");
         try
         {
@@ -442,6 +464,7 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         finally
         {
             _busy = false;
+            _checking = false;
             _check.IsEnabled = true;
         }
 
@@ -465,7 +488,7 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         if (vendor.Count > 0) lines.Add($"{vendor.Count} from the hardware makers  ·  {SystemInfo.FormatBytes(vendorSize)} to download");
         if (vendor.Any(u => u.Interactive)) lines.Add("Some makers do not allow silent installs: their installer window opens, follow its steps.");
         if (!DurazznoDialog.Confirm(Window.GetWindow(this), updates.Count == 1 ? "Install 1 driver update?" : $"Install {updates.Count} driver updates?",
-                "They are downloaded and installed one after another, after a system restore point, so you can go back if something goes wrong.",
+                "They are downloaded and installed one after another, after a system restore point (or, with System Restore off, a backup of the current drivers), so you can go back if something goes wrong.",
                 "Install", icon: "download", tone: "Accent", bullets: lines))
             return;
 
@@ -490,7 +513,7 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         var declined = false;
         try
         {
-            using var process = DriverUpdates.StartInstall(new InstallJob(updates), jobFile, progressFile);
+            using var process = DriverUpdates.StartInstall(new InstallJob(updates, DriverBackups.NewFolder() + " before updates"), jobFile, progressFile);
             if (process is null)
             {
                 declined = true;
@@ -513,6 +536,11 @@ internal sealed class DriverHubPage : UserControl, IDisposable
                             continue;
                         if (p.Phase == "restorepoint")
                             restoreNote = p.Message;
+                        else if (p.Phase == "backup")
+                        {
+                            restoreNote = restoreNote is null ? p.Message : $"{restoreNote}. {p.Message}";
+                            _backups = null; // the Backups tab reloads with the new one
+                        }
                         else if (p.UpdateId.Length > 0)
                             OnProgress(p, updates);
                     }
@@ -570,6 +598,12 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         _progress[p.UpdateId] = state;
         if (p.RebootRequired)
             _rebootRequested.Add(p.UpdateId);
+        if (p is { Phase: "done", RebootRequired: true } && batch.FirstOrDefault(u => u.UpdateId == p.UpdateId) is { } waiting)
+        {
+            PendingRestart.Add(waiting);
+            _pendingList = PendingRestart.List();
+            RenderRestartBanner();
+        }
         // Installed but broke the device (the installer already put the previous driver back): never offer it again.
         if (p.Phase == "rolledback" && !(_app.Settings.Current.HiddenDriverUpdates ?? []).Contains(p.UpdateId, StringComparer.OrdinalIgnoreCase))
             _app.Settings.Update(s => s.HiddenDriverUpdates = [.. (s.HiddenDriverUpdates ?? []), p.UpdateId]);
@@ -724,10 +758,18 @@ internal sealed class DriverHubPage : UserControl, IDisposable
     private void ApplyHidden()
     {
         _hidden.Clear();
+        _pending.Clear();
+        _pendingList = PendingRestart.List();
         var hidden = (_app.Settings.Current.HiddenDriverUpdates ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var d in _devices.Where(d => d.Update is not null))
         {
-            if (hidden.Contains(d.Update!.UpdateId))
+            // Installed and waiting for a restart: the device still reports the old driver until then.
+            if (PendingRestart.Find(_pendingList, d.Update!) is { } pending)
+            {
+                _pending[d.DeviceId] = pending;
+                d.Update = null;
+            }
+            else if (hidden.Contains(d.Update!.UpdateId))
             {
                 _hidden[d.DeviceId] = d.Update;
                 d.Update = null;
@@ -1045,6 +1087,7 @@ internal sealed class DriverHubPage : UserControl, IDisposable
             return;
         }
 
+        RenderRestartBanner();
         var rows = Visible(_filter)
             .OrderByDescending(d => d.Update is not null)
             .ThenByDescending(d => d.HasProblem)
@@ -1070,7 +1113,7 @@ internal sealed class DriverHubPage : UserControl, IDisposable
 
         var visible = Visible(Filter.All).ToList();
         _summary.Text = $"{visible.Count} devices  ·  {visible.Count(d => d.HasProblem)} with problems  ·  {visible.Count(d => d.IsOld)} drivers older than 4 years  ·  {Visible(Filter.Unused).Count()} unused"
-            + (_updates is null ? "  ·  press Check for updates" : $"  ·  {_devices.Count(d => d.Update is not null)} updates available")
+            + $"  ·  {UpdatesSummary()}"
             + (_showSystem.IsChecked == true ? "" : $"  ·  {_devices.Count(d => d.IsPresent) - visible.Count} system devices hidden");
     }
 
@@ -1165,6 +1208,8 @@ internal sealed class DriverHubPage : UserControl, IDisposable
             return;
         }
 
+        if (_pending.TryGetValue(d.DeviceId, out var waiting))
+            stack.Children.Add(Note($"{waiting.Title} is installed. Restart Windows to finish; until then the old driver is shown.", "Warning"));
         if (d.IsDisabled)
             stack.Children.Add(Note("This device is disabled in Device Manager. Enable it there if you need it.", "Info"));
         else if (d.HasProblem)
@@ -1328,6 +1373,44 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         System.Windows.Automation.AutomationProperties.SetName(b, text);
         b.Click += async (_, _) => await click();
         return b;
+    }
+
+    /// <summary>
+    /// Update count for the summary line: this session's check, or until then the last check's result (manual or
+    /// background, kept in settings).
+    /// </summary>
+    private string UpdatesSummary()
+    {
+        if (_checking)
+            return "checking for updates…";
+        if (_updates is not null)
+            return Available(Visible(Filter.Updates).Count()); // same number as the Updates tab
+        var s = _app.Settings.Current;
+        if (s.DriverCheckLast is not { } last || s.DriverNotifiedIds is not { } ids)
+            return "updates not checked yet";
+        return $"{Available(ids.Count)} (last check {(last.Date == DateTime.Today ? last.ToString("HH:mm") : last.ToString("MMM d"))})";
+
+        static string Available(int n) => n == 1 ? "1 update available" : $"{n} updates available";
+    }
+
+    private void RenderRestartBanner()
+    {
+        var count = _pendingList.Count;
+        _restartBanner.Visibility = count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (count == 0)
+            return;
+        var names = _pendingList.Select(p => _devices.FirstOrDefault(d => _pending.TryGetValue(d.DeviceId, out var x) && x.UpdateId == p.UpdateId)?.Name ?? p.Title).Distinct().ToList();
+        _restartText.Text = (count == 1 ? "Restart Windows to finish 1 driver: " : $"Restart Windows to finish {count} drivers: ")
+            + string.Join(", ", names.Take(3)) + (names.Count > 3 ? $" and {names.Count - 3} more" : "") + ".";
+    }
+
+    private void RestartWindows()
+    {
+        if (!DurazznoDialog.Confirm(Window.GetWindow(this), "Restart Windows now?",
+                "Save your work first. Windows restarts right away to finish installing the drivers.", "Restart", icon: "power", tone: "Warning"))
+            return;
+        try { Process.Start(new ProcessStartInfo("shutdown.exe", "/r /t 0") { CreateNoWindow = true, UseShellExecute = false })?.Dispose(); }
+        catch (Exception ex) { Log.Warn($"Could not restart Windows: {ex.Message}"); }
     }
 
     private static void Run(string file, string? args = null)

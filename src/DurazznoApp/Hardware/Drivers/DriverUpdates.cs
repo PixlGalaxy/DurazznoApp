@@ -58,13 +58,17 @@ internal sealed record DriverUpdate(
     public Version? ParsedVersion => System.Version.TryParse(Version, out var v) ? v : DriverUpdates.ParseVersion(Title) ?? DriverUpdates.ParseVersion(Model);
 }
 
-/// <summary>What the elevated installer has to do: these updates, one after the other, in this order.</summary>
-internal sealed record InstallJob(List<DriverUpdate> Items);
+/// <summary>
+/// What the elevated installer has to do: these updates, one after the other, in this order. BackupFolder is where the
+/// drivers being replaced are exported when no restore point can be made (chosen by the app, so it lands in the user's
+/// Documents even when the elevated process runs as another account).
+/// </summary>
+internal sealed record InstallJob(List<DriverUpdate> Items, string? BackupFolder = null);
 
 /// <summary>
 /// One progress event from the elevated installer (a JSON line in the progress file). Phase: queued, downloading,
 /// installing, done, error, rolledback (installed, did not work, previous driver restored), cancelled;
-/// "restorepoint" carries the restore point outcome (UpdateId empty).
+/// "restorepoint" carries the restore point outcome and "backup" the backup made instead of it (UpdateId empty).
 /// </summary>
 internal sealed record InstallProgress(string UpdateId, string Phase, double? Percent = null, string? Message = null, bool RebootRequired = false);
 
@@ -291,6 +295,9 @@ internal static class DriverUpdates
 
             var restore = RestorePoint.Begin("Durazzno App: before driver updates");
             Report(new InstallProgress("", "restorepoint", Message: restore.Error));
+            // No restore point (System Restore off, or it failed): keep a copy of the drivers about to be replaced.
+            if (restore.Error is not null && job.BackupFolder is { Length: > 0 } backupFolder)
+                Report(new InstallProgress("", "backup", Message: BackUpReplaced(job.Items, devices, backupFolder)));
 
             foreach (var u in job.Items)
             {
@@ -469,6 +476,52 @@ internal static class DriverUpdates
         {
             return new InstallResult(v.UpdateId, v.Title, false, ex.Message, false);
         }
+    }
+
+    /// <summary>
+    /// Exports the third-party driver packages (oem*.inf) the updates will replace into one subfolder each, so the
+    /// backup shows in DriverHub's Backups tab and can be restored from there. In-box Windows drivers are not exported:
+    /// Windows always has them. Returns a short outcome for the status line.
+    /// </summary>
+    private static string BackUpReplaced(List<DriverUpdate> updates, List<DeviceInfo> devices, string folder)
+    {
+        var infs = updates
+            .SelectMany(u =>
+            {
+                var targets = devices.Where(d => d.IsPresent && d.HardwareIds.Contains(u.HardwareId, StringComparer.OrdinalIgnoreCase)).ToList();
+                return targets.Count > 0 ? targets : devices.Where(d => d.IsPresent && d.CompatibleIds.Contains(u.HardwareId, StringComparer.OrdinalIgnoreCase));
+            })
+            .Select(d => d.InfName)
+            .OfType<string>()
+            .Where(inf => inf.StartsWith("oem", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (infs.Count == 0)
+            return "The drivers being replaced are Windows' own, so there was nothing to back up";
+
+        var saved = 0;
+        foreach (var inf in infs)
+        {
+            try
+            {
+                var target = Path.Combine(folder, Path.GetFileNameWithoutExtension(inf));
+                Directory.CreateDirectory(target);
+                using var process = Process.Start(new ProcessStartInfo("pnputil.exe", $"/export-driver {inf} \"{target}\"") { CreateNoWindow = true, UseShellExecute = false })!;
+                process.WaitForExit();
+                if (process.ExitCode == 0)
+                    saved++;
+                else
+                    Log.Warn($"DriverHub backup of {inf}: pnputil finished with code {process.ExitCode}");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"DriverHub backup of {inf}: {ex.Message}");
+            }
+        }
+        Log.Info($"DriverHub: backed up {saved} of {infs.Count} drivers before installing to {folder}");
+        return saved == 0
+            ? "The current drivers could not be backed up"
+            : $"The current drivers were backed up instead ({saved} in Backups: {Path.GetFileName(folder)})";
     }
 
     public static int RunBackup(string folder)

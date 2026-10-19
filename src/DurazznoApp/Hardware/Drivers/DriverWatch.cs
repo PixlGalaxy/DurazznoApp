@@ -45,7 +45,8 @@ internal sealed class DriverWatch
             var devices = await Task.Run(DeviceScanner.Scan);
             await DriverSearch.RunAsync(devices, null, null, CancellationToken.None);
             var hidden = (s.HiddenDriverUpdates ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var found = devices.Where(d => d.Update is not null && !hidden.Contains(d.Update.UpdateId)).ToList();
+            var pending = PendingRestart.List(); // installed, waiting for a restart: not new
+            var found = devices.Where(d => d.Update is not null && !hidden.Contains(d.Update.UpdateId) && PendingRestart.Find(pending, d.Update) is null).ToList();
             var known = (s.DriverNotifiedIds ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var fresh = found.Where(d => !known.Contains(d.Update!.UpdateId)).ToList();
             MarkSeen(found.Select(d => d.Update!));
