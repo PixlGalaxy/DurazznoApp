@@ -7,7 +7,7 @@ namespace Durazzno.Network;
 internal static class WebinCloud
 {
     // Test server: "http://192.168.0.150:5002"   Production: "https://webincloud.itzgalaxy.com"
-    public const string Server = "http://192.168.0.150:5002";
+    public const string Server = "https://webincloud.itzgalaxy.com";
 
     // Path name "durazznoapp" on Webin Cloud Server, with one folder per kind of file.
 
