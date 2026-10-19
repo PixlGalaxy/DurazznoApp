@@ -1,10 +1,11 @@
-﻿using System.Windows;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Durazzno.Apps;
 using Durazzno.Core;
+using Durazzno.Hardware;
 using Durazzno.Tools;
 using Durazzno.UI.Controls;
 
@@ -33,6 +34,7 @@ internal sealed class AppsPage : UserControl
     private List<AppEntry>? _online;
     private List<InstalledApp> _installed = AppCatalog.Installed();
     private bool _showOnline;
+    private string? _details; // key of the Online app shown large (null: the tiles)
     private bool _loading;
 
     public AppsPage(AppController app)
@@ -50,7 +52,7 @@ internal sealed class AppsPage : UserControl
         _search.VerticalAlignment = VerticalAlignment.Center;
         _search.Margin = new Thickness(0, 0, 10, 0);
         System.Windows.Automation.AutomationProperties.SetName(_search, "Search apps");
-        _search.TextChanged += (_, _) => Render();
+        _search.TextChanged += (_, _) => { _details = null; Render(); };
         var actions = Ui.Row(_search, _refresh);
         actions.HorizontalAlignment = HorizontalAlignment.Right;
         actions.VerticalAlignment = VerticalAlignment.Center;
@@ -76,6 +78,7 @@ internal sealed class AppsPage : UserControl
             }
             _installed = AppCatalog.Installed();
             _showOnline = false; // the page always opens on Installed
+            _details = null;
             Render();
             _poll.Start();
             await LoadOnlineAsync();
@@ -136,11 +139,19 @@ internal sealed class AppsPage : UserControl
         {
             var b = new RadioButton { Content = count is null ? label : $"{label}  {count}", GroupName = "apps-tab", Style = Ui.Res<Style>("Segment"), IsChecked = _showOnline == online };
             System.Windows.Automation.AutomationProperties.SetName(b, label);
-            b.Checked += (_, _) => { _showOnline = online; Render(); };
+            b.Checked += (_, _) => { _showOnline = online; _details = null; Render(); };
             _tabs.Children.Add(b);
         }
         Tab("Installed", false, _installed.Count);
         Tab("Online", true, _online?.Count);
+
+        // An Online app opened large; it closes when the app leaves the catalog (server gone, unpublished).
+        if (_showOnline && _online?.FirstOrDefault(a => a.Key == _details) is { } shown)
+        {
+            _body.Content = DetailView(shown);
+            return;
+        }
+        _details = null;
 
         _tiles.Children.Clear();
         _progress.Clear();
@@ -197,16 +208,123 @@ internal sealed class AppsPage : UserControl
         var tile = Tile(entry.Name, entry.Version, entry.Description, null, text, tone, out var iconHost, out var label, out var bar);
         _progress[entry.Key] = (label, bar);
         _ = LoadIconAsync(entry, iconHost);
-        tile.MouseLeftButtonUp += async (_, _) =>
+        tile.MouseLeftButtonUp += (_, _) =>
         {
             if (_downloading.Contains(entry.Key))
                 return;
+            _details = entry.Key; // open it large: description, details, BACK / INSTALL
+            Render();
+        };
+        return tile;
+    }
+
+    /// <summary>An Online app shown large: icon, full description, details, and BACK plus INSTALL / UPDATE / OPEN.</summary>
+    private FrameworkElement DetailView(AppEntry entry)
+    {
+        var installed = _installed.FirstOrDefault(a => a.Key == entry.Key);
+        var hasUpdate = installed is not null && entry.Version is not null && entry.Version != installed.Version;
+
+        var iconHost = new ContentControl { Width = 104, Height = 104, Focusable = false, Content = Icon(null, 104) };
+        _ = Task.Run(async () =>
+        {
+            var path = await AppCatalog.DownloadIconAsync(entry, CancellationToken.None);
+            if (path is not null)
+                await Dispatcher.InvokeAsync(() => iconHost.Content = Icon(path, 104));
+        });
+
+        var name = new TextBlock { Text = entry.Name, FontFamily = Ui.Res<FontFamily>("HeadingFont"), FontWeight = FontWeights.Bold, FontSize = 34,
+            Foreground = Ui.B("Text"), TextWrapping = TextWrapping.Wrap };
+        var sub = Ui.Text((entry.Version is null ? "" : $"v{entry.Version}  ·  ") + "Webin Cloud Server", "CardHint", Ui.B("TextDim"));
+        var names = Ui.Stack(name, sub);
+        if (installed is not null)
+        {
+            var (text, tone) = hasUpdate ? ($"INSTALLED v{installed.Version}  ·  UPDATE AVAILABLE", "Info") : ($"INSTALLED v{installed.Version}", "Success");
+            names.Children.Add(new Border
+            {
+                Background = Ui.B(tone + "Chip"), Padding = new Thickness(8, 3, 8, 4), Margin = new Thickness(0, 10, 0, 0), HorizontalAlignment = HorizontalAlignment.Left,
+                Child = new TextBlock { Text = text, Foreground = Ui.B(tone), FontSize = 11.5, FontWeight = FontWeights.Bold },
+            });
+        }
+        names.Margin = new Thickness(24, 0, 0, 0);
+        names.VerticalAlignment = VerticalAlignment.Center;
+        var head = new Grid();
+        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        head.ColumnDefinitions.Add(new ColumnDefinition());
+        head.Children.Add(iconHost);
+        head.Children.Add(names.At(1));
+
+        var description = Ui.Text(string.IsNullOrWhiteSpace(entry.Description) ? "No description." : entry.Description.Trim(), "Body", Ui.B("TextMuted"));
+        description.TextWrapping = TextWrapping.Wrap;
+        description.FontSize = 15;
+        description.MaxWidth = 820;
+        description.HorizontalAlignment = HorizontalAlignment.Left;
+        description.Margin = new Thickness(0, 26, 0, 0);
+        var stack = Ui.Stack(head, description);
+
+        // The catalog's message (requirements, warnings): shown here instead of a popup before downloading.
+        if (!string.IsNullOrWhiteSpace(entry.Message))
+        {
+            var message = Ui.Text(entry.Message.Trim(), "Body", Ui.B("Warning"));
+            message.TextWrapping = TextWrapping.Wrap;
+            message.Margin = new Thickness(12, 0, 0, 0);
+            var row = new Grid();
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition());
+            row.Children.Add(new LucideIcon { Icon = "triangle-alert", Width = 18, Height = 18, Foreground = Ui.B("Warning"), VerticalAlignment = VerticalAlignment.Top });
+            row.Children.Add(message.At(1));
+            stack.Children.Add(new Border { Background = Ui.B("WarningChip"), Padding = new Thickness(14, 11, 14, 11), Margin = new Thickness(0, 20, 0, 0), MaxWidth = 820,
+                HorizontalAlignment = HorizontalAlignment.Left, Child = row });
+        }
+
+        var details = Ui.Stack(Ui.PanelTitle("DETAILS"));
+        details.Margin = new Thickness(0, 28, 0, 0);
+        void Field(string label, string value, bool mono = false)
+        {
+            var row = new Grid { Margin = new Thickness(0, 12, 0, 0) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(170) });
+            row.ColumnDefinitions.Add(new ColumnDefinition());
+            row.Children.Add(Ui.Text(label, "CardLabel"));
+            var text = Ui.Text(value, "Body", Ui.B("Text"));
+            text.TextWrapping = TextWrapping.Wrap;
+            if (mono)
+                text.FontFamily = Ui.Res<FontFamily>("MonoFont");
+            row.Children.Add(text.At(1));
+            details.Children.Add(row);
+        }
+        Field("VERSION", entry.Version ?? "Not stated");
+        if (entry.Size is > 0)
+            Field("DOWNLOAD SIZE", SystemInfo.FormatBytes(entry.Size.Value));
+        Field("FROM", "Webin Cloud Server");
+        Field("CHECK", string.IsNullOrWhiteSpace(entry.Sha256) ? "Not checked (the app updates itself)" : "SHA-256 checked before it's saved");
+        var shortcuts = new[] { entry.DesktopShortcut ? "Desktop" : null, entry.StartMenuShortcut ? "Start Menu" : null }.OfType<string>().ToList();
+        Field("SHORTCUTS", shortcuts.Count == 0 ? "None" : string.Join(" and ", shortcuts));
+        Field("INSTALLS TO", Path.Combine(AppCatalog.AppsDir, entry.Key), mono: true);
+        stack.Children.Add(details);
+
+        var back = new Button { Style = Ui.Res<Style>("SecondaryButton"), Content = IconLabel("chevron-left", "BACK") };
+        System.Windows.Automation.AutomationProperties.SetName(back, "BACK");
+        back.Click += (_, _) => { _details = null; Render(); };
+        var (icon, action) = installed is null ? ("download", "INSTALL") : hasUpdate ? ("download", $"UPDATE TO {entry.Version}") : ("external-link", "OPEN");
+        var primary = new Button { Style = Ui.Res<Style>("PrimaryButton"), Margin = new Thickness(10, 0, 0, 0),
+            Content = Ui.Row(new LucideIcon { Icon = icon, Width = 15, Height = 15, Foreground = Ui.B("AccentText") },
+                new TextBlock { Text = action, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center }) };
+        System.Windows.Automation.AutomationProperties.SetName(primary, action);
+        primary.Click += (_, _) =>
+        {
+            _details = null;
+            Render(); // back to the tiles, where this app's card shows the download progress
             if (installed is not null && !hasUpdate)
                 OpenApp(installed);
             else
-                await DownloadAsync(entry);
+                _ = DownloadAsync(entry, confirmed: true);
         };
-        return tile;
+        var buttons = Ui.Row(back, primary);
+        buttons.Margin = new Thickness(0, 32, 0, 0);
+        stack.Children.Add(buttons);
+
+        var card = Ui.Card(stack, new Thickness(36, 32, 36, 32));
+        card.Margin = new Thickness(0, 16, 0, 0);
+        return card;
     }
 
     private FrameworkElement InstalledTile(InstalledApp installed)
@@ -270,7 +388,7 @@ internal sealed class AppsPage : UserControl
         return card;
     }
 
-    private static UIElement Icon(string? path)
+    private static UIElement Icon(string? path, double size = 52)
     {
         if (path is not null && File.Exists(path))
         {
@@ -280,17 +398,17 @@ internal sealed class AppsPage : UserControl
                 image.BeginInit();
                 image.CacheOption = BitmapCacheOption.OnLoad;
                 image.UriSource = new Uri(path);
-                image.DecodePixelWidth = 104;
+                image.DecodePixelWidth = (int)(size * 2);
                 image.EndInit();
                 image.Freeze();
-                return new Image { Source = image, Width = 52, Height = 52, Stretch = Stretch.Uniform };
+                return new Image { Source = image, Width = size, Height = size, Stretch = Stretch.Uniform };
             }
             catch
             {
                 // not an image: fall back to the generic icon
             }
         }
-        return Ui.IconChip("package", Imaging.Brush(Accent), Imaging.Brush(Accent, 0x26), 52, 24);
+        return Ui.IconChip("package", Imaging.Brush(Accent), Imaging.Brush(Accent, 0x26), size, size * 0.46);
     }
 
     private static async Task LoadIconAsync(AppEntry entry, ContentControl host)
@@ -337,12 +455,12 @@ internal sealed class AppsPage : UserControl
 
     // ── Actions ───────────────────────────────────────────────────────────────────────────
 
-    private async Task DownloadAsync(AppEntry entry)
+    private async Task DownloadAsync(AppEntry entry, bool confirmed = false)
     {
         // Only while the server is answering: the catalog is dropped as soon as a refresh fails.
         if (_online?.Any(a => a.Key == entry.Key) != true)
             return;
-        if (!string.IsNullOrWhiteSpace(entry.Message)
+        if (!confirmed && !string.IsNullOrWhiteSpace(entry.Message)
             && !DurazznoDialog.Confirm(Window.GetWindow(this), entry.Name, entry.Message.Trim(), "Download", icon: "triangle-alert", tone: "Warning"))
             return;
 
