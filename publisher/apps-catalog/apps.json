@@ -1,0 +1,25 @@
+{
+    "apps":  [
+                 {
+                     "id":  "DeckHub",
+                     "name":  "DeckHub",
+                     "description":  "Stream Deck-style touch display for your PC: shows audio, media and PC stats, and controls your RGB lights. Runs in the background and starts with Windows.",
+                     "version":  "https://webincloud.itzgalaxy.com/backend/api/public/durazznoapp/DurazznoApp/Apps/Dist/DeckHub/DeckHubVersion.txt/download?inline=1&path=",
+                     "url":  "https://webincloud.itzgalaxy.com/backend/api/public/durazznoapp/DurazznoApp/Apps/Dist/DeckHub/DeckHub.exe/download?inline=1&path=",
+                     "sha256":  "https://webincloud.itzgalaxy.com/backend/api/public/durazznoapp/DurazznoApp/Apps/Dist/DeckHub/DeckHubHash.txt/download?inline=1&path=",
+                     "icon":  "https://webincloud.itzgalaxy.com/backend/api/public/durazznoapp/DurazznoApp/Apps/Dist/DeckHub/DeckHubIcon.png/download?inline=1&path=",
+                     "desktopShortcut":  true,
+                     "startMenuShortcut":  true
+                 },
+                 {
+                     "id":  "powerlinksound",
+                     "name":  "Power Link Sound",
+                     "version":  "2.0",
+                     "description":  "Plays the charging sound when you plug in the charger. Runs in the background and starts with Windows.",
+                     "url":  "https://webincloud.itzgalaxy.com/backend/api/public/durazznoapp/DurazznoApp/Apps/Dist/PowerLinkSound/PowerLinkSound.exe/download?inline=1&path=",
+                     "icon":  "https://webincloud.itzgalaxy.com/backend/api/public/durazznoapp/DurazznoApp/Apps/Dist/PowerLinkSound/PowerLinkSound.png/download?inline=1&path=",
+                     "message":  "Power Link Sound runs in the background (no window) and adds itself to startup the first time it opens. To remove it from startup, run PowerLinkSound.exe --uninstall.",
+                     "sha256":  "e8c2be22f93e4c12a2ac6894e05c73b42111cde38bf5cc767335310c6c0ea191"
+                 }
+             ]
+}

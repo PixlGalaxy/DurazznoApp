@@ -3,8 +3,8 @@ using System.Security.Cryptography;
 namespace Durazzno.Updates;
 
 /// <summary>
-/// Signed update manifests. publish.ps1 signs manifest.json with a private RSA key that never leaves the publisher's
-/// PC (crypto/update-signing-key.xml at the repository root, git-ignored; see crypto/README.md) and uploads the signature
+/// Signed update manifests. publish-main.ps1 signs manifest.json with a private RSA key that never leaves the publisher's
+/// PC (publisher/crypto/update-signing-key.xml, git-ignored; see publisher/crypto/README.md) and uploads the signature
 /// as manifest.json.sig next to it. The app only accepts a manifest whose signature verifies against the public key
 /// below, so a tampered manifest (server, network, plain HTTP) cannot point Durazzno at another exe. The public key
 /// can be public: it verifies signatures, it cannot make them.

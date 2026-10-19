@@ -4,8 +4,7 @@ Tray app for Windows with the PC tools I actually use, all in one window: disk h
 startup items, timer resolution, drivers and scheduled shutdowns. It updates itself from my Webin Cloud Server.
 
 It's a C# (.NET 9, WPF) rewrite of the original 2022 Python version. Everything ships as a single exe,
-`DurazznoApp.exe`, with no .NET or Python install needed. Next to it there's `DurazznoTerminal.exe`, a small
-recovery console for when the app won't start.
+`DurazznoApp.exe`, with no .NET or Python install needed.
 
 ## What's inside
 
@@ -27,7 +26,8 @@ recovery console for when the app won't start.
 
 The app checks Webin Cloud Server in the background. With auto-update on, new versions download quietly and install
 the next time the PC starts. Otherwise you get a notification and an **APPLY UPDATE** button. Releases are signed,
-so the app only installs builds I published.
+so the app only installs builds I published. If a new version crashes right after installing, the app goes back to
+the previous one on its own.
 
 The server address lives in one place: `WebinCloud.Server` in `src/DurazznoApp/Network/WebinCloud.cs`.
 
@@ -35,26 +35,18 @@ The server address lives in one place: `WebinCloud.Server` in `src/DurazznoApp/N
 
 ```powershell
 dotnet build DurazznoApp.sln
-.\scripts\publish.ps1 -Version 3.0.1 -Notes "what changed"
+.\scripts\publish-main.ps1 -Version 3.0.1 -Notes "what changed"
 ```
 
-You need the .NET 9 SDK and the Visual Studio C++ build tools (the terminal is Native AOT). Signing a release needs
-the private key in `crypto/`, which is not in the repo.
+You need the .NET 9 SDK. Signing a release needs the private key in `publisher/crypto/`, which is not in the repo.
 
-`publish.ps1` leaves the app in `dist\DurazznoApp\` and the files to upload in `dist\server\`.
-
-## Durazzno Terminal
-
-For when something breaks: `status`, `start`, `stop`, `restart`, `repair`, `rollback`, `reset`, `server`, `logs`,
-`open`, `startup`, `timer off`, `powercuts cancel` and `uninstall`. You can also run a single command directly,
-like `DurazznoTerminal.exe repair`.
+`publish-main.ps1` leaves the app in `dist\DurazznoApp\` and the files to upload in `dist\server\`.
 
 ## Project layout
 
 ```
 src/DurazznoApp/         the app
-src/DurazznoTerminal/    recovery console
-scripts/publish.ps1      build and sign a release
+scripts/publish-main.ps1 build and sign a release
 scripts/publish-apps.ps1 build and sign the Apps catalog
 ```
 

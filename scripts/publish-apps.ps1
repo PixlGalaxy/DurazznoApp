@@ -3,15 +3,14 @@
     Builds the signed apps catalog (apps.json + apps.json.sig) for the Apps folder on Webin Cloud Server (WebinCloud.AppsPath).
 
 .DESCRIPTION
-    Source folder (default: apps-catalog\ at the repository root, git-ignored) holds:
-      apps.json        written by hand, see webincloud\README.md:
-                         { "apps": [ { "id": "...", "name": "...", "description": "...", "version": "1.0",
-                                       "url": "MyApp.exe", "icon": "MyApp.png", "message": "optional" } ] }
-      the app files and icons that apps.json names (or use full links instead)
+    Source folder (default: publisher\apps-catalog\; publisher\Publisher.bat edits it) holds:
+      apps.json        { "apps": [ { "id": "...", "name": "...", "description": "...", "version": "1.0",
+                                     "url": "Dist/MyApp/MyApp.exe", "icon": "Dist/MyApp/MyApp.png", "message": "optional" } ] }
+      the app files and icons that apps.json names, by relative path (or use full links instead)
 
     For every "url" that is a file in the source folder, the script fills in "sha256" and "size", so the app checks the
-    download. The result goes to dist\apps\: upload everything in it to that folder (same names, overwriting).
-    apps.json is signed with crypto\update-signing-key.xml; Durazzno ignores an unsigned or altered catalog.
+    download. The result goes to dist\apps\ with the same relative paths: upload everything in it to that folder.
+    apps.json is signed with publisher\crypto\update-signing-key.xml; Durazzno ignores an unsigned or altered catalog.
 
 .EXAMPLE
     .\scripts\publish-apps.ps1
@@ -21,12 +20,12 @@ param([string]$Source)
 
 $ErrorActionPreference = 'Stop'
 $root    = Split-Path $PSScriptRoot -Parent
-if (-not $Source) { $Source = Join-Path $root 'apps-catalog' }
+if (-not $Source) { $Source = Join-Path $root 'publisher\apps-catalog' }
 $out     = Join-Path $root 'dist\apps'
-$keyPath = Join-Path $root 'crypto\update-signing-key.xml'
+$keyPath = Join-Path $root 'publisher\crypto\update-signing-key.xml'
 $utf8    = New-Object System.Text.UTF8Encoding $false
 
-if (-not (Test-Path $keyPath)) { throw "Signing key not found at $keyPath. See crypto\README.md." }
+if (-not (Test-Path $keyPath)) { throw "Signing key not found at $keyPath. See publisher\crypto\README.md." }
 $catalogPath = Join-Path $Source 'apps.json'
 if (-not (Test-Path $catalogPath)) { throw "No apps.json in $Source." }
 
@@ -40,7 +39,10 @@ if ($webinCloud -notmatch 'const string Server = "([^"]+)"') { throw 'Could not 
 $server = $Matches[1].TrimEnd('/')
 if ($webinCloud -notmatch 'const string AppsPath = "([^"]+)"') { throw 'Could not read WebinCloud.AppsPath from WebinCloud.cs.' }
 $appsPath = $Matches[1].Trim('/')
-function FileLink($name) { "$server/backend/api/public/$appsPath/$([Uri]::EscapeDataString($name))/download?inline=1&path=" }
+function FileLink($path) {
+    $escaped = ($path -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+    "$server/backend/api/public/$appsPath/$escaped/download?inline=1&path="
+}
 
 $catalog = Get-Content $catalogPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $apps = @()
@@ -62,12 +64,16 @@ foreach ($app in $catalog.apps) {
         if ($field -eq 'sha256' -and $value -match '^[0-9A-Fa-f]{64}$') { continue }
         $file = Join-Path $Source $value
         if (-not (Test-Path $file)) { throw "$($app.name): $field ""$value"" is not in $Source (use a full link for files hosted elsewhere)." }
-        Copy-Item $file $out -Force
+        # Same relative path on the server (e.g. Dist/MyApp/MyApp.exe).
+        $relative = $value.Replace('\', '/').TrimStart('/')
+        $target = Join-Path $out $relative
+        New-Item -ItemType Directory -Force (Split-Path $target -Parent) | Out-Null
+        Copy-Item $file $target -Force
         if ($field -eq 'url') {
             if (-not $hashGiven) { $entry.sha256 = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant() }
             $entry.size = (Get-Item $file).Length
         }
-        $entry[$field] = FileLink (Split-Path $value -Leaf)
+        $entry[$field] = FileLink $relative
     }
     if ($entry.Contains('sha256') -and -not $entry.sha256) { $entry.Remove('sha256') } # "" = not checked
     $apps += [pscustomobject]$entry

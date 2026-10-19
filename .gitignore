@@ -10,21 +10,11 @@ obj/
 .vs/
 
 # Update signing key (private): never commit
-/crypto/
+/publisher/crypto/
 
-# Local to-do list: never commit
+# Local notes: never commit
 /TODO.md
-
-# Apps catalog source (apps.json + app files): published with scripts\publish-apps.ps1
-/apps-catalog/
+/HANDOFF.md
 
 # Power Link Sound (separate app, kept local)
 /src/PowerLinkSound/
-
-# Webin Cloud publishing notes (local only)
-/webincloud/
-
-# Legacy (Cerberus) bridge to migrate the old Python app (local only)
-/scripts/legacy-bridge/
-/scripts/publish-legacy-bridge.ps1
-/HANDOFF.md
