@@ -143,6 +143,7 @@ internal sealed partial class MainWindow : Window
         "startuphub" => new StartupHubPage(_app, ToolCatalog.Find("startuphub")!),
         "timerresolution" => new TimerResolutionPage(_app, ToolCatalog.Find("timerresolution")!),
         "driverhub" => new DriverHubPage(_app, ToolCatalog.Find("driverhub")!),
+        "wintweaks" => new WinTweaksPage(_app, ToolCatalog.Find("wintweaks")!),
         PowerCutsPage => new PowerCutsPage(_app),
         AppsPage => new Pages.AppsPage(_app),
         _ => null,

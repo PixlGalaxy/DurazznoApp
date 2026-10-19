@@ -13,7 +13,7 @@ It's a C# (.NET 9, WPF) rewrite of the original 2022 Python version. Everything 
   It only polls while the page is open, plus one check at startup that warns if a disk is going bad.
 - **DiskMark**: the CrystalDiskMark tests (SEQ1M, RND4K) running on DiskSpd.
 - **DiskMap**: see what's eating space on each drive.
-- **StartupHub**: everything that starts with Windows (Run keys, startup folders, tasks, services) with signature
+- **Startup**: everything that starts with Windows (Run keys, startup folders, tasks, services) with signature
   checks, and you can turn things on and off.
 - **TimerResolution**: set and hold the Windows timer resolution. Only applied if you turn it on.
 - **DriverHub**: my take on Driver Easy, without the paid database. Updates come from Windows Update, the Microsoft
