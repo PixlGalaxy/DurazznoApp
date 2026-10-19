@@ -18,22 +18,49 @@ internal sealed class InstallException(string message, Exception? inner = null) 
 
 /// <summary>
 /// What the installer does: read the signed manifest from Webin Cloud Server (the same one Durazzno App updates from),
-/// download DurazznoApp.exe and check it against the manifest's SHA-256 and size, copy it to the install folder and add
-/// Desktop and Start Menu shortcuts. Starting with Windows is left to the app: it turns that on the first time it runs.
+/// download DurazznoApp.exe and check it against the manifest's SHA-256 and size, copy it to the install folder, add
+/// Desktop and Start Menu shortcuts and register itself as the uninstaller. Starting with Windows is left to the app:
+/// it turns that on the first time it runs. Uninstalling removes the folder (with the apps downloaded into it), the
+/// shortcuts and startup entries pointing there, and the app's settings.
 /// </summary>
 internal static class Installer
 {
     public const string ExeFileName = "DurazznoApp.exe";
-    public const string ShortcutName = "Durazzno App.lnk";
+    // A test install (--dir) gets its own names, so it never replaces a real install's shortcuts.
+    public static string ShortcutName => Testing ? "Durazzno App (test).lnk" : "Durazzno App.lnk";
 
     /// <summary>
     /// Per-user, no admin rights needed: Durazzno replaces its own exe when it updates, which Program Files would
     /// turn into a UAC prompt every time. Overridable with --dir for testing.
     /// </summary>
-    public static string InstallDir { get; set; } =
+    public static string InstallDir { get; private set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "DurazznoApp");
 
+    /// <summary>Durazzno App's settings, logs and history (AppInfo.DataDir in the app).</summary>
+    public static string DataDir { get; private set; } =
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DurazznoApp");
+
+    /// <summary>--dir: install somewhere else, with its own data folder and Apps &amp; features entry (testing).</summary>
+    public static bool Testing { get; private set; }
+
+    public static void UseTestFolder(string folder)
+    {
+        InstallDir = Path.GetFullPath(folder);
+        DataDir = Path.Combine(InstallDir, "data");
+        Testing = true;
+    }
+
     public static string ExePath => Path.Combine(InstallDir, ExeFileName);
+
+    /// <summary>A copy of this installer kept in the install folder: Start Menu's "Uninstall Durazzno App" opens it.</summary>
+    public static string InstallerCopyPath => Path.Combine(InstallDir, "DurazznoAppInstaller.exe");
+
+    public static string UninstallShortcutName => Testing ? "Uninstall Durazzno App (test).lnk" : "Uninstall Durazzno App.lnk";
+
+    public static bool IsInstalled => File.Exists(ExePath);
+
+    private static string UninstallKey => @"Software\Microsoft\Windows\CurrentVersion\Uninstall\" + (Testing ? "DurazznoApp (test)" : "DurazznoApp");
+    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
     private static readonly HttpClient Http = CreateClient();
 
@@ -136,7 +163,7 @@ internal static class Installer
         {
             try
             {
-                if (string.Equals(process.MainModule?.FileName, ExePath, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(ImagePath(process.Id), ExePath, StringComparison.OrdinalIgnoreCase))
                     return process;
             }
             catch
@@ -184,18 +211,159 @@ internal static class Installer
     public static void CreateShortcuts()
     {
         foreach (var folder in new[] { Environment.SpecialFolder.DesktopDirectory, Environment.SpecialFolder.Programs })
+            SaveShortcut(Path.Combine(Environment.GetFolderPath(folder), ShortcutName), ExePath, "Durazzno App");
+    }
+
+    /// <summary>
+    /// Keeps a copy of this installer in the install folder and makes it the uninstaller: a Start Menu shortcut and an
+    /// entry in Windows' Apps &amp; features (per user, no admin rights).
+    /// </summary>
+    public static void RegisterUninstaller(Release release)
+    {
+        var self = Process.GetCurrentProcess().MainModule!.FileName;
+        if (!string.Equals(self, InstallerCopyPath, StringComparison.OrdinalIgnoreCase))
+            File.Copy(self, InstallerCopyPath, overwrite: true);
+        SaveShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), UninstallShortcutName), InstallerCopyPath,
+            "Repair or uninstall Durazzno App");
+
+        using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(UninstallKey);
+        key.SetValue("DisplayName", Testing ? "Durazzno App (test)" : "Durazzno App");
+        key.SetValue("DisplayIcon", ExePath + ",0");
+        key.SetValue("Publisher", "Galaxy Apps");
+        key.SetValue("InstallLocation", InstallDir);
+        key.SetValue("UninstallString", $"\"{InstallerCopyPath}\"");
+        key.SetValue("URLInfoAbout", "https://www.itzgalaxy.com");
+        key.SetValue("EstimatedSize", (int)(release.Size / 1024), Microsoft.Win32.RegistryValueKind.DWord);
+        key.SetValue("NoModify", 1, Microsoft.Win32.RegistryValueKind.DWord);
+        key.SetValue("NoRepair", 1, Microsoft.Win32.RegistryValueKind.DWord);
+    }
+
+    private static void SaveShortcut(string path, string target, string description)
+    {
+        var type = Type.GetTypeFromProgID("WScript.Shell") ?? throw new InstallException("Windows could not create the shortcuts.");
+        dynamic shell = Activator.CreateInstance(type)!;
+        dynamic link = shell.CreateShortcut(path);
+        link.TargetPath = target;
+        link.WorkingDirectory = InstallDir;
+        link.IconLocation = ExePath + ",0";
+        link.Description = description;
+        link.Save();
+    }
+
+    // ── Uninstall ───────────────────────────────────────────────────────────────────────
+
+    /// <summary>Closes Durazzno App and anything else running from the install folder (apps downloaded through it).</summary>
+    public static void CloseEverything()
+    {
+        var self = Process.GetCurrentProcess().Id;
+        foreach (var process in Process.GetProcesses())
         {
-            var path = Path.Combine(Environment.GetFolderPath(folder), ShortcutName);
-            var type = Type.GetTypeFromProgID("WScript.Shell") ?? throw new InstallException("Windows could not create the shortcuts.");
-            dynamic shell = Activator.CreateInstance(type)!;
-            dynamic link = shell.CreateShortcut(path);
-            link.TargetPath = ExePath;
-            link.WorkingDirectory = InstallDir;
-            link.IconLocation = ExePath + ",0";
-            link.Description = "Durazzno App";
-            link.Save();
+            using (process)
+            {
+                try
+                {
+                    if (process.Id == self || !IsInside(ImagePath(process.Id)))
+                        continue;
+                    process.Kill();
+                    process.WaitForExit(10_000);
+                }
+                catch
+                {
+                    // gone already, or not ours to close
+                }
+            }
         }
     }
+
+    /// <summary>
+    /// A process's exe path, the quick way Task Manager reads it (Process.MainModule loads every process's module list
+    /// and takes minutes across a whole PC). Null for processes this user cannot query.
+    /// </summary>
+    private static string? ImagePath(int pid)
+    {
+        const uint QueryLimitedInformation = 0x1000;
+        var handle = OpenProcess(QueryLimitedInformation, false, pid);
+        if (handle == IntPtr.Zero)
+            return null;
+        try
+        {
+            var buffer = new StringBuilder(1024);
+            var size = buffer.Capacity;
+            return QueryFullProcessImageName(handle, 0, buffer, ref size) ? buffer.ToString(0, size) : null;
+        }
+        finally
+        {
+            CloseHandle(handle);
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder name, ref int size);
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    /// <summary>
+    /// Removes what points into the install folder: Desktop and Start Menu shortcuts (Durazzno's and the ones made for
+    /// downloaded apps), "start with Windows" entries (Durazzno's and its apps'), and the Apps &amp; features entry.
+    /// Shortcuts and entries pointing anywhere else are left alone.
+    /// </summary>
+    public static void RemoveShortcutsAndStartup()
+    {
+        var type = Type.GetTypeFromProgID("WScript.Shell");
+        dynamic? shell = type is null ? null : Activator.CreateInstance(type);
+        foreach (var folder in new[] { Environment.SpecialFolder.DesktopDirectory, Environment.SpecialFolder.Programs })
+        {
+            foreach (var lnk in Directory.EnumerateFiles(Environment.GetFolderPath(folder), "*.lnk"))
+            {
+                try
+                {
+                    string target = shell is null ? "" : (string)shell.CreateShortcut(lnk).TargetPath;
+                    if (IsInside(target))
+                        File.Delete(lnk);
+                }
+                catch
+                {
+                    // unreadable shortcut: not ours
+                }
+            }
+        }
+
+        using (var run = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey, writable: true))
+        {
+            foreach (var name in run?.GetValueNames() ?? [])
+                if (run!.GetValue(name) is string command && command.IndexOf(InstallDir, StringComparison.OrdinalIgnoreCase) >= 0)
+                    run.DeleteValue(name, throwOnMissingValue: false);
+        }
+        Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, throwOnMissingSubKey: false);
+    }
+
+    /// <summary>Deletes the install folder (the app and every downloaded app) and Durazzno's settings, logs and history.</summary>
+    public static void DeleteFiles()
+    {
+        foreach (var folder in new[] { InstallDir, DataDir })
+        {
+            for (var attempt = 1; Directory.Exists(folder); attempt++)
+            {
+                try
+                {
+                    Directory.Delete(folder, recursive: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    if (attempt >= 20)
+                        throw new InstallException($"Some files in {folder} are still in use. Close any app from Durazzno and try again.", ex);
+                    Thread.Sleep(500); // closed processes may still be letting go of their files
+                }
+            }
+        }
+    }
+
+    private static bool IsInside(string? path) =>
+        !string.IsNullOrEmpty(path) && Path.GetFullPath(path).StartsWith(InstallDir.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Starts the installed app: with its window (--open), or in the tray.</summary>
     public static void Launch(bool openWindow) =>

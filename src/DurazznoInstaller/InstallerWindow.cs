@@ -75,7 +75,16 @@ internal sealed class InstallerWindow : Window
             else
                 _work?.Cancel();
         };
-        ShowWelcome();
+        ShowStart();
+    }
+
+    /// <summary>Nothing installed: the install flow. Durazzno App in the folder: Repair or Uninstall.</summary>
+    private void ShowStart()
+    {
+        if (Installer.IsInstalled)
+            ShowInstalled();
+        else
+            ShowWelcome();
     }
 
     // ── Pages ───────────────────────────────────────────────────────────────────────────
@@ -94,6 +103,76 @@ internal sealed class InstallerWindow : Window
                 Spaced(location, 22)),
             Button("CANCEL", "SecondaryButton", Close),
             Button("NEXT", "PrimaryButton", () => _ = CheckAsync()));
+    }
+
+    private void ShowInstalled()
+    {
+        var logo = new Image { Source = LoadLogo(256), Width = 76, Height = 76, HorizontalAlignment = HorizontalAlignment.Left };
+        RenderOptions.SetBitmapScalingMode(logo, BitmapScalingMode.HighQuality);
+        Show(Stack(logo,
+                Spaced(Text("Durazzno App is installed", "PageTitle"), 16),
+                Spaced(Text("Repair downloads Durazzno App again and puts it back in place, keeping your settings and apps. "
+                    + "Uninstall removes it from this PC.", "Body"), 6),
+                Spaced(Card(Stack(Text("INSTALLED IN", "CardLabel"), Mono(Installer.InstallDir, 6))), 22)),
+            Button("CANCEL", "SecondaryButton", Close),
+            Button("UNINSTALL", "SecondaryButton", ShowConfirmUninstall),
+            Button("REPAIR", "PrimaryButton", () => _ = CheckAsync()));
+    }
+
+    private void ShowConfirmUninstall()
+    {
+        var removed = Card(Stack(
+            Text("THIS REMOVES", "CardLabel"),
+            Spaced(Text("•  Durazzno App and every app you downloaded through it", "Body"), 8),
+            Text("•  Its shortcuts and its \"start with Windows\" entries", "Body"),
+            Text("•  Its settings, logs and disk health history", "Body"),
+            Spaced(Text("Driver backups in Documents\\Durazzno App are kept.", "CardHint"), 10)));
+        Show(Stack(Glyph(Icons.Alert, B("Warning"), 58),
+                Spaced(Text("Uninstall Durazzno App?", "PageTitle"), 16),
+                Spaced(removed, 22)),
+            Button("CANCEL", "SecondaryButton", ShowInstalled),
+            Button("UNINSTALL", "DangerButton", () => _ = UninstallAsync()));
+    }
+
+    private async Task UninstallAsync()
+    {
+        var close = new StatusRow("Close Durazzno App", "Waiting…");
+        var links = new StatusRow("Shortcuts and startup", "Waiting…");
+        var files = new StatusRow("Files", "Waiting…");
+        Show(Stack(Text("Uninstalling Durazzno App", "PageTitle"),
+                Spaced(Card(Stack(close, Spaced(links, 12), Spaced(files, 12))), 22)));
+
+        StatusRow current = close;
+        try
+        {
+            _copying = true; // no closing halfway
+            close.Busy("Closing Durazzno and its apps…");
+            await Task.Run(Installer.CloseEverything);
+            close.Done("Closed");
+
+            current = links;
+            links.Busy("Removing…");
+            await Task.Run(Installer.RemoveShortcutsAndStartup);
+            links.Done("Removed");
+
+            current = files;
+            files.Busy("Deleting the app, its apps and its settings…");
+            await Task.Run(Installer.DeleteFiles);
+            files.Done("Deleted");
+            _copying = false;
+
+            await Task.Delay(400);
+            Show(Stack(Glyph(Icons.Check, B("Success"), 58),
+                    Spaced(Text("Durazzno App was uninstalled", "PageTitle"), 16),
+                    Spaced(Text("Everything it installed is gone. Thanks for using it.", "Body"), 6)),
+                Button("CLOSE", "PrimaryButton", Close));
+        }
+        catch (Exception ex)
+        {
+            _copying = false;
+            current.Failed(ex.Message);
+            SetFooter(Button("CLOSE", "SecondaryButton", Close), Button("TRY AGAIN", "PrimaryButton", () => _ = UninstallAsync()));
+        }
     }
 
     private async Task CheckAsync()
@@ -193,8 +272,12 @@ internal sealed class InstallerWindow : Window
             current = shortcuts;
             shortcuts.Busy("Desktop and Start Menu…");
             bar.Set(0.97, "Creating shortcuts…");
-            await Task.Run(Installer.CreateShortcuts);
-            shortcuts.Done("Desktop and Start Menu");
+            await Task.Run(() =>
+            {
+                Installer.CreateShortcuts();
+                Installer.RegisterUninstaller(release);
+            });
+            shortcuts.Done("Desktop, Start Menu and the uninstaller");
             bar.Set(1, "Done");
 
             await Task.Delay(400);
@@ -203,7 +286,7 @@ internal sealed class InstallerWindow : Window
         catch (OperationCanceledException)
         {
             if (IsLoaded)
-                ShowWelcome(); // cancelled while downloading: nothing was installed
+                ShowStart(); // cancelled while downloading: nothing was changed
         }
         catch (Exception ex)
         {

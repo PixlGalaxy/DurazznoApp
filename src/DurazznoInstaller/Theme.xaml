@@ -104,6 +104,12 @@
         <Setter Property="Foreground" Value="{StaticResource AccentText}" />
     </Style>
 
+    <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource ButtonBase}">
+        <Setter Property="Background" Value="{StaticResource Danger}" />
+        <Setter Property="BorderBrush" Value="{StaticResource Danger}" />
+        <Setter Property="Foreground" Value="White" />
+    </Style>
+
     <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource ButtonBase}">
         <Setter Property="Background" Value="{StaticResource HoverBg}" />
         <Setter Property="BorderBrush" Value="{StaticResource PanelBorder}" />
