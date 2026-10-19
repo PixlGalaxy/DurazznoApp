@@ -93,6 +93,7 @@ public sealed class DriverRow : INotifyPropertyChanged
             var (color, value, text) = p.Phase switch
             {
                 "downloading" => ("#22C55E", p.Percent ?? 0, p.Percent is { } pct ? $"DOWNLOADING {pct:0}%" : "DOWNLOADING…"),
+                "downloaded" => ("#22C55E", 100.0, "READY"),
                 "installing" => ("#38BDF8", 100.0, "INSTALLING…"),
                 "done" => ("#22C55E", 100.0, "INSTALLED"),
                 "error" => ("#F97316", 100.0, "ERROR"),
@@ -173,6 +174,7 @@ internal sealed class DriverHubPage : UserControl, IDisposable
     private readonly ContentControl _listTitle = Ui.PanelTitle("DEVICES");
     private readonly Button _check, _installAll, _backup, _cancel, _removeAll;
     private string? _jobFile; // the running install, for Cancel
+    private string? _installingId; // the update installing right now (the status line follows it)
     private readonly TextBox _search = new() { Width = 240, Tag = "Search devices" };
 
     private List<DeviceInfo> _devices = [];
@@ -471,9 +473,23 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         Render();
     }
 
+    /// <summary>
+    /// Install order: chipset and system first, then everything else, graphics, and network last (a network driver
+    /// drops the connection while it installs, so nothing may still be downloading by then).
+    /// </summary>
+    private static int InstallStep(DeviceInfo d) => d.ClassName.ToUpperInvariant() switch
+    {
+        "SYSTEM" or "FIRMWARE" or "HDC" or "SCSIADAPTER" or "SECURITYDEVICES" or "COMPUTER" => 0,
+        "DISPLAY" => 2,
+        "NET" => 3,
+        _ => 1,
+    };
+
     private async Task InstallAsync(List<DeviceInfo> devices)
     {
-        var updates = devices.Select(d => d.Update).OfType<DriverUpdate>().DistinctBy(u => u.UpdateId).ToList();
+        var updates = devices.Where(d => d.Update is not null)
+            .OrderBy(InstallStep).ThenByDescending(d => d.HasProblem).ThenBy(d => d.ClassName).ThenBy(d => d.Name) // same order as the list
+            .Select(d => d.Update!).DistinctBy(u => u.UpdateId).ToList();
         if (updates.Count == 0 || _busy)
             return;
 
@@ -487,6 +503,7 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         if (catalog.Count > 0) lines.Add($"{catalog.Count} from the Microsoft Update Catalog  ·  {SystemInfo.FormatBytes(size)} to download");
         if (vendor.Count > 0) lines.Add($"{vendor.Count} from the hardware makers  ·  {SystemInfo.FormatBytes(vendorSize)} to download");
         if (vendor.Any(u => u.Interactive)) lines.Add("Some makers do not allow silent installs: their installer window opens, follow its steps.");
+        if (!SystemRestore.IsOn) lines.Add("System Restore is off: the current drivers are backed up instead (Backups tab).");
         if (!DurazznoDialog.Confirm(Window.GetWindow(this), updates.Count == 1 ? "Install 1 driver update?" : $"Install {updates.Count} driver updates?",
                 "They are downloaded and installed one after another, after a system restore point (or, with System Restore off, a backup of the current drivers), so you can go back if something goes wrong.",
                 "Install", icon: "download", tone: "Accent", bullets: lines))
@@ -613,18 +630,25 @@ internal sealed class DriverHubPage : UserControl, IDisposable
 
         var index = batch.FindIndex(u => u.UpdateId == p.UpdateId) + 1;
         var update = batch[Math.Max(0, index - 1)];
+        // Downloads run several at a time: while one driver installs, the status line stays on it.
+        if (p.Phase == "installing")
+            _installingId = p.UpdateId;
+        else if (p.UpdateId == _installingId && p.Phase is "done" or "error" or "rolledback" or "cancelled")
+            _installingId = null;
+        if (p.Phase is "downloading" or "downloaded" && _installingId is not null)
+            return;
+
         var phase = p.Phase switch
         {
             "downloading" => p.Percent is { } pct ? $"downloading {pct:0}%" : "downloading",
+            "downloaded" => "downloaded, waiting its turn",
             "installing" => update.Interactive ? "installing, follow the installer window" : "installing",
             "done" => "installed",
             "error" => $"failed: {p.Message}",
             "rolledback" => "rolled back, doesn't work on this Windows",
             _ => "queued",
         };
-        // Cancel works while downloading; a driver already installing always finishes.
-        if (p.Phase is "downloading" or "installing" && _jobFile is not null && !_status.Text.StartsWith("Cancelling", StringComparison.Ordinal))
-            _cancel.IsEnabled = p.Phase == "downloading";
+        // Cancel stays available: it stops the downloads and the queue; a driver already installing always finishes.
         if (p.Phase is not ("queued" or "cancelled") && !_status.Text.StartsWith("Cancelling", StringComparison.Ordinal))
             _status.Text = $"{index} of {batch.Count}  ·  {DeviceName(update)}  ·  {update.Title}  ·  {phase}";
     }
@@ -1090,6 +1114,7 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         RenderRestartBanner();
         var rows = Visible(_filter)
             .OrderByDescending(d => d.Update is not null)
+            .ThenBy(d => d.Update is not null ? InstallStep(d) : 0) // updates in install order
             .ThenByDescending(d => d.HasProblem)
             .ThenBy(d => d.ClassName)
             .ThenBy(d => d.Name)
@@ -1162,6 +1187,11 @@ internal sealed class DriverHubPage : UserControl, IDisposable
                 Run("explorer.exe", $"\"{DriverBackups.Root}\"");
                 return Task.CompletedTask;
             })));
+            if (!SystemRestore.IsOn)
+            {
+                panel.Children.Add(Note("System Restore is off, so driver installs can't make a restore point. DriverHub backs up the drivers it replaces instead; turning System Restore on also protects the rest of Windows.", "Warning"));
+                panel.Children.Add(Buttons(Action("shield-check", "TURN ON SYSTEM RESTORE", "SecondaryButton", TurnOnSystemRestoreAsync, !_busy)));
+            }
             _detail.Content = panel;
             return;
         }
@@ -1402,6 +1432,24 @@ internal sealed class DriverHubPage : UserControl, IDisposable
         var names = _pendingList.Select(p => _devices.FirstOrDefault(d => _pending.TryGetValue(d.DeviceId, out var x) && x.UpdateId == p.UpdateId)?.Name ?? p.Title).Distinct().ToList();
         _restartText.Text = (count == 1 ? "Restart Windows to finish 1 driver: " : $"Restart Windows to finish {count} drivers: ")
             + string.Join(", ", names.Take(3)) + (names.Count > 3 ? $" and {names.Count - 3} more" : "") + ".";
+    }
+
+    private async Task TurnOnSystemRestoreAsync()
+    {
+        _busy = true;
+        RenderDetail();
+        _status.Foreground = Ui.B("Info");
+        _status.Text = "Turning on System Restore…";
+        var error = await SystemRestore.TurnOnAsync();
+        _busy = false;
+        _status.Foreground = Ui.B(error is null ? "Success" : error == "Cancelled" ? "Info" : "Warning");
+        _status.Text = error switch
+        {
+            null => "System Restore is on. Driver installs make a restore point first.",
+            "Cancelled" => "System Restore was not changed.",
+            _ => $"Could not turn on System Restore: {error}",
+        };
+        RenderDetail();
     }
 
     private void RestartWindows()

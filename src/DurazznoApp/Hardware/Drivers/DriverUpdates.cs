@@ -299,6 +299,13 @@ internal static class DriverUpdates
             if (restore.Error is not null && job.BackupFolder is { Length: > 0 } backupFolder)
                 Report(new InstallProgress("", "backup", Message: BackUpReplaced(job.Items, devices, backupFolder)));
 
+            // Downloads start in the job's order, up to ParallelDownloads at a time, while the installs below run one by
+            // one in that same order, each as soon as its own download is ready. Windows Update drivers download inside
+            // their install step (the Windows Update Agent does it).
+            var ready = job.Items.Where(u => u.Source != DriverSource.WindowsUpdate)
+                .ToDictionary(u => u.UpdateId, _ => new TaskCompletionSource<object>(TaskCreationOptions.RunContinuationsAsynchronously));
+            var downloads = StartDownloads(job.Items, ready, work, Report, cancel.Token);
+
             foreach (var u in job.Items)
             {
                 if (cancel.IsCancellationRequested)
@@ -311,30 +318,23 @@ internal static class DriverUpdates
                 var healthy = DriverGuard.Snapshot(devices, u.HardwareId);
                 try
                 {
-                    Report(new InstallProgress(u.UpdateId, "downloading", 0));
-                    var lastPercent = -1;
-                    void Bytes(long got, long total)
-                    {
-                        var percent = total > 0 ? (int)(got * 100 / total) : -1;
-                        if (percent != lastPercent)
-                        {
-                            lastPercent = percent;
-                            Report(new InstallProgress(u.UpdateId, "downloading", percent >= 0 ? percent : null));
-                        }
-                    }
+                    // A network driver drops the connection while it installs: let every download finish first.
+                    if (TargetsOf(u, devices).Any(d => d.ClassName.Equals("Net", StringComparison.OrdinalIgnoreCase)))
+                        await downloads;
 
                     switch (u.Source)
                     {
                         case DriverSource.WindowsUpdate:
+                            Report(new InstallProgress(u.UpdateId, "downloading"));
                             result = InstallFromWindowsUpdate(u, () => Report(new InstallProgress(u.UpdateId, "installing")));
                             break;
                         case DriverSource.Catalog:
-                            var inf = await DriverCatalog.PrepareAsync(u, work, Bytes, cancel.Token);
+                            var inf = (CatalogInstall)await ready[u.UpdateId].Task;
                             Report(new InstallProgress(u.UpdateId, "installing"));
                             result = InstallInf(inf);
                             break;
                         default:
-                            var installer = await VendorDrivers.PrepareAsync(u, work, Bytes, cancel.Token);
+                            var installer = (VendorInstall)await ready[u.UpdateId].Task;
                             Report(new InstallProgress(u.UpdateId, "installing"));
                             result = RunInstaller(installer, u.Source);
                             break;
@@ -360,6 +360,7 @@ internal static class DriverUpdates
                 Log.Info($"DriverHub install {u.Title}: {(result.Success ? "ok" : "failed")} ({result.Message})");
                 Report(new InstallProgress(u.UpdateId, result.Success ? "done" : "error", 100, result.Message, result.RebootRequired));
             }
+            await downloads; // after a cancel, let the stopped downloads let go of the work folder before it is deleted
 
             RestorePoint.End(restore);
         }
@@ -375,6 +376,75 @@ internal static class DriverUpdates
             try { File.Delete(CancelFile(jobFile)); } catch { }
         }
         return 0;
+    }
+
+    /// <summary>How many catalog / maker downloads run at the same time during an install.</summary>
+    private const int ParallelDownloads = 4;
+
+    /// <summary>
+    /// Starts the catalog and maker downloads in the given order, at most <see cref="ParallelDownloads"/> at a time,
+    /// completing each item's entry in <paramref name="ready"/> with what its install needs. The returned task ends when
+    /// every download has finished (or failed, or was cancelled); it never throws.
+    /// </summary>
+    private static Task StartDownloads(List<DriverUpdate> items, Dictionary<string, TaskCompletionSource<object>> ready, string work,
+        Action<InstallProgress> report, CancellationToken ct) => Task.Run(async () =>
+    {
+        using var slots = new SemaphoreSlim(ParallelDownloads);
+        var running = new List<Task>();
+        foreach (var u in items.Where(u => ready.ContainsKey(u.UpdateId)))
+        {
+            var done = ready[u.UpdateId];
+            try
+            {
+                await slots.WaitAsync(ct); // in order: the next download starts only when a slot frees up
+            }
+            catch (OperationCanceledException)
+            {
+                done.TrySetCanceled(ct);
+                continue;
+            }
+            report(new InstallProgress(u.UpdateId, "downloading", 0)); // here, not in the task, so starts are reported in order
+            running.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    var lastPercent = 0;
+                    void Bytes(long got, long total)
+                    {
+                        var percent = total > 0 ? (int)(got * 100 / total) : -1;
+                        if (percent == lastPercent)
+                            return;
+                        lastPercent = percent;
+                        report(new InstallProgress(u.UpdateId, "downloading", percent >= 0 ? percent : null));
+                    }
+                    object prepared = u.Source == DriverSource.Catalog
+                        ? await DriverCatalog.PrepareAsync(u, work, Bytes, ct)
+                        : await VendorDrivers.PrepareAsync(u, work, Bytes, ct);
+                    report(new InstallProgress(u.UpdateId, "downloaded", 100));
+                    done.TrySetResult(prepared);
+                }
+                catch (OperationCanceledException)
+                {
+                    done.TrySetCanceled(ct);
+                }
+                catch (Exception ex)
+                {
+                    done.TrySetException(ex);
+                }
+                finally
+                {
+                    slots.Release();
+                }
+            }));
+        }
+        await Task.WhenAll(running);
+    });
+
+    /// <summary>The present devices an update is for: its hardware ID, or failing that its compatible ID.</summary>
+    private static List<DeviceInfo> TargetsOf(DriverUpdate u, List<DeviceInfo> devices)
+    {
+        var targets = devices.Where(d => d.IsPresent && d.HardwareIds.Contains(u.HardwareId, StringComparer.OrdinalIgnoreCase)).ToList();
+        return targets.Count > 0 ? targets : devices.Where(d => d.IsPresent && d.CompatibleIds.Contains(u.HardwareId, StringComparer.OrdinalIgnoreCase)).ToList();
     }
 
     private static InstallResult InstallFromWindowsUpdate(DriverUpdate update, Action installing)
@@ -486,11 +556,7 @@ internal static class DriverUpdates
     private static string BackUpReplaced(List<DriverUpdate> updates, List<DeviceInfo> devices, string folder)
     {
         var infs = updates
-            .SelectMany(u =>
-            {
-                var targets = devices.Where(d => d.IsPresent && d.HardwareIds.Contains(u.HardwareId, StringComparer.OrdinalIgnoreCase)).ToList();
-                return targets.Count > 0 ? targets : devices.Where(d => d.IsPresent && d.CompatibleIds.Contains(u.HardwareId, StringComparer.OrdinalIgnoreCase));
-            })
+            .SelectMany(u => TargetsOf(u, devices))
             .Select(d => d.InfName)
             .OfType<string>()
             .Where(inf => inf.StartsWith("oem", StringComparison.OrdinalIgnoreCase))

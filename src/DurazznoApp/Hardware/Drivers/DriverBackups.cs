@@ -4,6 +4,55 @@ using Durazzno.Core;
 
 namespace Durazzno.Hardware.Drivers;
 
+/// <summary>
+/// System Restore on the Windows drive. Driver installs make a restore point first; with it off they back up the
+/// replaced drivers instead, and DriverHub offers to turn it on.
+/// </summary>
+internal static class SystemRestore
+{
+    /// <summary>True when System Restore is on (RPSessionInterval = 1; readable without admin rights).</summary>
+    public static bool IsOn
+    {
+        get
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore");
+                return key?.GetValue("RPSessionInterval") is int interval && interval != 0;
+            }
+            catch
+            {
+                return true; // unknown: don't nag
+            }
+        }
+    }
+
+    /// <summary>Turns System Restore on for the Windows drive (one UAC prompt). Returns an error or null.</summary>
+    public static async Task<string?> TurnOnAsync()
+    {
+        var drive = Path.GetPathRoot(Environment.SystemDirectory) ?? @"C:\";
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo("powershell.exe",
+                $"-NoProfile -ExecutionPolicy Bypass -Command \"Enable-ComputerRestore -Drive '{drive}'; exit [int](-not $?)\"")
+            {
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden,
+            });
+            if (process is null)
+                return "Could not start PowerShell.";
+            await process.WaitForExitAsync();
+            Log.Info($"System Restore: turn on {drive} finished with code {process.ExitCode}");
+            return process.ExitCode == 0 && IsOn ? null : "Windows did not turn System Restore on.";
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            return "Cancelled";
+        }
+    }
+}
+
 /// <summary>A driver backup folder made by BACKUP DRIVERS.</summary>
 internal sealed record DriverBackup(string Folder, DateTime Created, int Packages, long SizeBytes)
 {
