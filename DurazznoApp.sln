@@ -7,8 +7,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DurazznoApp", "src\DurazznoApp\DurazznoApp.csproj", "{7DFA40A8-0028-44ED-B60B-86009D490DA5}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DurazznoTerminal", "src\DurazznoTerminal\DurazznoTerminal.csproj", "{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -31,24 +29,11 @@ Global
 		{7DFA40A8-0028-44ED-B60B-86009D490DA5}.Release|x64.Build.0 = Release|Any CPU
 		{7DFA40A8-0028-44ED-B60B-86009D490DA5}.Release|x86.ActiveCfg = Release|Any CPU
 		{7DFA40A8-0028-44ED-B60B-86009D490DA5}.Release|x86.Build.0 = Release|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Debug|x64.Build.0 = Debug|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Debug|x86.Build.0 = Debug|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Release|Any CPU.Build.0 = Release|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Release|x64.ActiveCfg = Release|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Release|x64.Build.0 = Release|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Release|x86.ActiveCfg = Release|Any CPU
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{7DFA40A8-0028-44ED-B60B-86009D490DA5} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
-		{0FB05FDD-D77F-4196-96F1-240EBD89DE1F} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

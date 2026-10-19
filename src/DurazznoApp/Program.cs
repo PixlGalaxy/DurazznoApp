@@ -99,7 +99,7 @@ internal static class Program
 #endif
         StartupManager.RepairPath();
 
-        using var controller = new AppController(settings, justUpdated);
+        using var controller = new AppController(settings, justUpdated, args.Contains(UpdateService.FailedFlag));
         instance.ListenForActivation(() => controller.ShowMainWindow());
         if (openWindow)
             controller.ShowMainWindow();

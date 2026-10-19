@@ -37,7 +37,7 @@ internal sealed class AppController : IDisposable
 
     private readonly SynchronizationContext _ui = SynchronizationContext.Current!;
 
-    public AppController(SettingsStore settings, bool justUpdated)
+    public AppController(SettingsStore settings, bool justUpdated, bool updateFailed = false)
     {
         Settings = settings;
         TimerResolution = new TimerResolutionService(settings);
@@ -63,7 +63,11 @@ internal sealed class AppController : IDisposable
         RefreshTray();
         _tray.Visible = true;
 
-        if (justUpdated)
+        // Back on this version after the new one crashed on start (UpdateService.RunFinish). The update is still offered.
+        if (updateFailed)
+            Notify("Durazzno App Update", "We couldn't complete the Durazzno App update.", ToolTipIcon.Warning,
+                onClick: () => ShowMainWindow(MainWindow.SettingsPage), tone: NotifyTone.Warning);
+        else if (justUpdated)
             Notify($"Durazzno App updated to {AppInfo.VersionText}", WhatsNewSummary(UpdateService.NotesFor(AppInfo.VersionText)) ?? "The new version is installed.",
                 tone: NotifyTone.Success);
 

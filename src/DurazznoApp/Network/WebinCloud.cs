@@ -1,8 +1,7 @@
 namespace Durazzno.Network;
 
 /// <summary>
-/// Where Durazzno's files live on Webin Cloud Server. Shared by the app and Durazzno Terminal (linked file).
-/// To switch servers change only <see cref="Server"/>.
+/// Where Durazzno's files live on Webin Cloud Server. To switch servers change only <see cref="Server"/>.
 /// </summary>
 internal static class WebinCloud
 {
@@ -56,7 +55,7 @@ internal static class WebinCloud
     }
 
     /// <summary>
-    /// A manifest override (settings "manifestUrl" / "DurazznoTerminal server"): empty = default; a bare server
+    /// A manifest override (settings "manifestUrl"): empty = default; a bare server
     /// ("https://host" or "http://ip:port") = that server's Main folder manifest; anything else is used as is.
     /// </summary>
     public static Uri ResolveManifest(string? configured)

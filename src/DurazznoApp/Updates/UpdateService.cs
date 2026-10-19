@@ -15,19 +15,24 @@ internal sealed record UpdateProgress(string Phase, double? Percent);
 /// Durazzno App updates in two steps:
 ///  1. Stage: the new exe is downloaded next to the current one as DurazznoApp.exe.staged and checked against
 ///     the SHA-256 in the signed manifest. This can happen in the background while the app runs.
-///  2. Apply: the running exe is renamed to .old (Windows allows that; Durazzno Terminal can roll back to it), the
-///     staged exe takes its place and the app restarts. Done at the next start, or right away when the user asks.
+///  2. Apply: the running exe is renamed to .old (Windows allows that), the staged exe takes its place and the app
+///     restarts. Done at the next start, or right away when the user asks.
+/// If the new version crashes right after starting, the .old exe is put back (see <see cref="RunFinish"/>). The update
+/// stays on offer: it is tried again at the next start or on APPLY UPDATE, so no version in the chain gets skipped.
 /// </summary>
 internal static class UpdateService
 {
     public const string UpdatedFlag = "--updated";   // started by an update: notify "updated"
     public const string OpenFlag = "--open";         // after a user-started update: show the window again
+    public const string FailedFlag = "--update-failed"; // back on the previous version: notify that the update failed
 
     private static string NewExe => AppInfo.ExePath + ".new";
     private static string StagedExe => AppInfo.ExePath + ".staged";
     private static string OldExe => AppInfo.ExePath + ".old";
     private static string StagedInfo => Path.Combine(AppInfo.DataDir, "update-staged.json");
     private static string WhatsNewFile => Path.Combine(AppInfo.DataDir, "whats-new.json");
+    /// <summary>How long a freshly installed version must keep running before the update counts as good.</summary>
+    private static readonly TimeSpan StartupGrace = TimeSpan.FromSeconds(20);
 
     private sealed record Staged(string Version, string Sha256);
     private sealed record ReleaseNotes(string Version, string Notes);
@@ -70,6 +75,8 @@ internal static class UpdateService
     public static void CleanupLeftovers()
     {
         TryDeleteFile(NewExe);
+        TryDeleteFile(AppInfo.ExePath + ".broken");
+        TryDeleteFile(Path.Combine(AppInfo.BaseDir, "DurazznoTerminal.exe")); // shipped up to 3.0.0, no longer used
         if (ReadStaged() is null)
         {
             TryDeleteFile(StagedExe);
@@ -126,7 +133,8 @@ internal static class UpdateService
     /// <summary>
     /// Runs in the staged exe: waits for the old version to exit, keeps it as .old, copies itself over
     /// DurazznoApp.exe and starts it. If anything fails the old exe is put back and started, so the PC never
-    /// ends up without Durazzno.
+    /// ends up without Durazzno. The same happens when the new version exits with an error within
+    /// <see cref="StartupGrace"/>.
     /// </summary>
     public static int RunFinish(string[] args)
     {
@@ -165,7 +173,14 @@ internal static class UpdateService
 
             TryDeleteFile(StagedInfo);
             Log.Info($"Durazzno App {AppInfo.VersionText} installed");
-            Process.Start(new ProcessStartInfo(target, open ? $"{UpdatedFlag} {OpenFlag}" : UpdatedFlag) { UseShellExecute = false })?.Dispose();
+            using var started = Process.Start(new ProcessStartInfo(target, open ? $"{UpdatedFlag} {OpenFlag}" : UpdatedFlag) { UseShellExecute = false });
+            // The app keeps running in the tray, so exiting with an error this early means it crashed on start.
+            if (started is not null && started.WaitForExit(StartupGrace) && started.ExitCode != 0 && File.Exists(old))
+            {
+                Log.Error($"Durazzno App {AppInfo.VersionText} exited with code {started.ExitCode} right after the update; going back to the previous version");
+                RollBack(target, old, open);
+                return 1;
+            }
             return 0;
         }
         catch (Exception ex)
@@ -175,6 +190,23 @@ internal static class UpdateService
             if (File.Exists(start))
                 Process.Start(new ProcessStartInfo(start, open ? OpenFlag : "--background") { UseShellExecute = false })?.Dispose();
             return 1;
+        }
+    }
+
+    private static void RollBack(string target, string old, bool open)
+    {
+        try
+        {
+            Retry(() => File.Move(target, target + ".broken", overwrite: true));
+            Retry(() => File.Move(old, target));
+            // --updated keeps every version (also ones older than this code) from installing the update again right
+            // away, which would loop; it is retried at the next start or on APPLY UPDATE. --update-failed shows why.
+            var args = $"{UpdatedFlag} {FailedFlag}" + (open ? " " + OpenFlag : "");
+            Process.Start(new ProcessStartInfo(target, args) { UseShellExecute = false })?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Going back to the previous version failed", ex);
         }
     }
 

@@ -66,19 +66,6 @@ internal sealed class SettingsPage : UserControl, IDisposable
         var reset = new Button { Content = "RESET TO DEFAULTS", Style = Ui.Res<Style>("SecondaryButton"), Margin = new Thickness(10, 0, 0, 0) };
         reset.Click += (_, _) => ResetToDefaults();
         var dataButtons = Ui.Row(openData, reset);
-
-        // Recovery console shipped next to the app (repair, rollback, reset... even when the app won't start).
-        var terminalExe = Path.Combine(AppInfo.BaseDir, "DurazznoTerminal.exe");
-        if (File.Exists(terminalExe))
-        {
-            var terminal = new Button { Content = "OPEN TERMINAL", Style = Ui.Res<Style>("SecondaryButton"), Margin = new Thickness(10, 0, 0, 0) };
-            terminal.Click += (_, _) =>
-            {
-                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(terminalExe) { UseShellExecute = true })?.Dispose(); }
-                catch (Exception ex) { Log.Warn($"Could not open Durazzno Terminal: {ex.Message}"); }
-            };
-            dataButtons.Children.Add(terminal);
-        }
         dataButtons.Margin = new Thickness(0, 20, 0, 0);
         var dataText = Ui.Text($"Settings and logs are stored in {AppInfo.DataDir}", "Body", Ui.B("TextMuted"));
         dataText.Margin = new Thickness(0, 16, 0, 0);

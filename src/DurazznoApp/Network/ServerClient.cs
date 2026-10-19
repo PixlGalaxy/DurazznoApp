@@ -12,7 +12,7 @@ namespace Durazzno.Network;
 internal static class ServerClient
 {
     // The server and path names are in WebinCloud.cs. The manifest can be overridden per machine with "manifestUrl"
-    // in %LOCALAPPDATA%\DurazznoApp\settings.json (or "DurazznoTerminal server <url>").
+    // in %LOCALAPPDATA%\DurazznoApp\settings.json.
 
     // Same endpoint Windows uses to decide whether there is internet at all.
     private const string InternetProbeUrl = "http://www.msftconnecttest.com/connecttest.txt";
@@ -46,7 +46,7 @@ internal static class ServerClient
     }
 
     /// <summary>
-    /// Downloads a file and its .sig (published by publish.ps1 / publish-apps.ps1) and returns the bytes only when the
+    /// Downloads a file and its .sig (published by publish-main.ps1 / publish-apps.ps1) and returns the bytes only when the
     /// signature verifies against Durazzno's public key.
     /// </summary>
     public static async Task<byte[]> GetSignedAsync(Uri uri, string what, CancellationToken ct)
