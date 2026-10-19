@@ -68,6 +68,28 @@
                     </Button>
 
                     <StackPanel Grid.Column="5" Orientation="Horizontal">
+                        <!-- itzgalaxy.com: same hover as the window buttons, with its label -->
+                        <Button ToolTip="Open itzgalaxy.com" AutomationProperties.Name="itzgalaxy.com" Cursor="Hand"
+                                WindowChrome.IsHitTestVisibleInChrome="True" Click="OnWebsiteClick" Height="56" Foreground="{StaticResource TextMuted}" FocusVisualStyle="{x:Null}">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Grid x:Name="Root" Background="Transparent">
+                                        <StackPanel Orientation="Horizontal" Margin="14,0" VerticalAlignment="Center">
+                                            <c:LucideIcon Icon="external-link" Width="17" Height="17" StrokeWidth="1.6"
+                                                          Foreground="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}" />
+                                            <TextBlock Text="itzgalaxy.com" Margin="9,0,0,1" VerticalAlignment="Center" FontFamily="{StaticResource HeadingFont}"
+                                                       FontWeight="SemiBold" FontSize="15" Foreground="{Binding Foreground, RelativeSource={RelativeSource TemplatedParent}}" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HoverBg}" />
+                                            <Setter Property="Foreground" Value="{StaticResource Text}" />
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
                         <Button x:Name="SettingsButton" Style="{StaticResource WindowButton}" Tag="settings" ToolTip="Settings" AutomationProperties.Name="Settings"
                                 WindowChrome.IsHitTestVisibleInChrome="True" Click="OnSettingsClick" />
                         <Button Style="{StaticResource WindowButton}" Tag="minus" ToolTip="Minimize"
@@ -90,6 +112,17 @@
                 <!-- Sidebar -->
                 <Border Background="{StaticResource SidebarBg}" BorderBrush="{StaticResource Divider}" BorderThickness="0,0,1,0">
                     <DockPanel>
+                        <!-- Footer: credits and version -->
+                        <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource Divider}" BorderThickness="0,1,0,0" Padding="26,14,20,16">
+                            <StackPanel>
+                                <TextBlock Text="2022 - 2026 Durazzno App" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" FontSize="13"
+                                           Foreground="{StaticResource TextMuted}" />
+                                <TextBlock Text="ItzGalaxy Web Services" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" FontSize="13"
+                                           Foreground="{StaticResource TextDim}" Margin="0,1,0,0" />
+                                <TextBlock x:Name="FooterVersion" FontFamily="{StaticResource HeadingFont}" FontWeight="SemiBold" FontSize="13"
+                                           Foreground="{StaticResource TextDim}" Margin="0,1,0,0" />
+                            </StackPanel>
+                        </Border>
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <StackPanel x:Name="NavPanel" Margin="0,6,0,12" />
                         </ScrollViewer>

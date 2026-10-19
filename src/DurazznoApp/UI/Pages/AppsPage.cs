@@ -25,7 +25,6 @@ internal sealed class AppsPage : UserControl
     private readonly ContentControl _body = new() { Focusable = false };
     private (string Icon, string Title, string Detail)? _error;
     private readonly WrapPanel _tabs = new() { VerticalAlignment = VerticalAlignment.Center };
-    private readonly TextBlock _status = Ui.Text("", "CardHint");
     private readonly Button _refresh;
     private readonly TextBox _search = new() { Width = 280, Tag = "Search apps" };
     private readonly Dictionary<string, (TextBlock Label, Grid Bar)> _progress = [];
@@ -62,9 +61,8 @@ internal sealed class AppsPage : UserControl
 
         var tabsRow = new Grid { Margin = new Thickness(0, 24, 0, 0) };
         tabsRow.Children.Add(_tabs);
-        _status.Margin = new Thickness(0, 8, 0, 0);
 
-        Content = Ui.Stack(header, tabsRow, _status, _body);
+        Content = Ui.Stack(header, tabsRow, _body);
 
         // The catalog is never cached: it is fetched every time the page opens and every 10 s while it is shown, so
         // when the server goes away the online apps disappear (and cannot be installed) until it is back.
@@ -95,11 +93,8 @@ internal sealed class AppsPage : UserControl
             return;
         _loading = true;
         _refresh.IsEnabled = false;
-        if (!quiet)
-        {
-            _status.Foreground = Ui.B("TextMuted");
-            _status.Text = "Loading apps from Webin Cloud Server…";
-        }
+        if (!quiet && _online is null)
+            Render(); // Online shows "Loading apps" until the list arrives
         var before = (_catalogStamp, _error);
         try
         {
@@ -107,15 +102,12 @@ internal sealed class AppsPage : UserControl
             _online = await AppCatalog.GetOnlineAsync(cts.Token);
             _catalogStamp = string.Join("|", _online.Select(a => $"{a.Key}:{a.Version}:{a.Sha256}:{a.Name}:{a.Description}:{a.Icon}"));
             _error = null;
-            if (!quiet)
-                _status.Text = "";
         }
         catch (Exception ex)
         {
             Log.Warn($"Apps: catalog: {ex.Message}");
             _online = null; // nothing from a server that is not answering: no stale list, nothing to install
             _catalogStamp = null;
-            _status.Text = "";
             _error = ex switch
             {
                 // The server answered, but with an error (404 = apps.json not uploaded, 5xx = server problem).
@@ -155,7 +147,9 @@ internal sealed class AppsPage : UserControl
         _body.Content = _tiles;
         if (_showOnline)
         {
-            if (_error is { } error && _online is null)
+            if (_online is null && _loading)
+                _body.Content = State("loader-circle", "Loading apps", "Getting the list from Webin Cloud Server.", "TextMuted", retry: false);
+            else if (_error is { } error && _online is null)
                 _body.Content = State(error.Icon, error.Title, error.Detail, error.Title == "Offline" ? "Warning" : "Danger", retry: true);
             else if (_online is { Count: 0 })
                 _body.Content = State("package", "No apps yet", "Nothing is published on Webin Cloud Server right now.", "TextMuted", retry: true);
@@ -412,10 +406,8 @@ internal sealed class AppsPage : UserControl
     private void OpenApp(InstalledApp installed)
     {
         if (AppCatalog.Open(installed) is { } error)
-        {
-            _status.Foreground = Ui.B("Warning");
-            _status.Text = $"Could not open {installed.Name}: {error}";
-        }
+            DurazznoDialog.Show(Window.GetWindow(this), $"Could not open {installed.Name}", error, "triangle-alert", "Warning",
+                [new DialogButton("Close", "PrimaryButton")]);
     }
 
     private void RemoveApp(InstalledApp installed)

@@ -39,6 +39,7 @@ internal sealed partial class MainWindow : Window
         BrandLogo.Source = logo;
         Icon = logo;
         VersionBadge.Text = $"v{AppInfo.VersionText}";
+        FooterVersion.Text = $"Version: {AppInfo.VersionText}";
         MachineText.Text = SystemInfo.MachineName;
 
         BuildNavigation();
@@ -250,7 +251,6 @@ internal sealed partial class MainWindow : Window
 
         var (text, tone) = connection.State switch
         {
-            ConnectionState.Online when manifest is { IsCurrentVersionSupported: false } => ("UNSUPPORTED VERSION", "Danger"),
             ConnectionState.Online => ("ONLINE", "Success"),
             ConnectionState.ServerUnreachable => ("SERVER UNREACHABLE", "Warning"),
             ConnectionState.NoInternet => ("OFFLINE", "Warning"),
@@ -293,6 +293,8 @@ internal sealed partial class MainWindow : Window
     }
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => Navigate(SettingsPage);
+
+    private void OnWebsiteClick(object sender, RoutedEventArgs e) => Launcher.OpenUrl(AppInfo.WebsiteUrl);
 
     private void OnMinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
