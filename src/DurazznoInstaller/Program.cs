@@ -7,6 +7,7 @@ namespace Durazzno.Installer;
 /// Durazzno App Installer: downloads the signed Durazzno App from Webin Cloud Server and installs it for this user.
 /// A copy of it in the install folder is the uninstaller (Start Menu, Apps &amp; features): opened with Durazzno App
 /// installed it offers Repair and Uninstall.
+/// --headless installs with no window and exits with a code (0 = installed; see Headless).
 /// --dir &lt;folder&gt; installs somewhere else, with its own data folder (testing).
 /// </summary>
 internal static class Program
@@ -19,6 +20,10 @@ internal static class Program
         var dir = Array.IndexOf(args, "--dir");
         if (dir >= 0 && dir + 1 < args.Length)
             Installer.UseTestFolder(args[dir + 1]);
+
+        // No window: install and exit with a code (see Headless). Also installs over an existing copy (a repair).
+        if (args.Contains(Headless.Flag))
+            return Headless.Run();
 
         // The uninstaller lives in the folder it deletes: run a copy from %TEMP% instead, which removes itself at exit.
         var self = Process.GetCurrentProcess().MainModule!.FileName;
