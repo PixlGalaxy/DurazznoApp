@@ -366,9 +366,10 @@ internal sealed class AppsPage : UserControl
         Show(0);
         try
         {
+            var update = _installed.Any(a => a.Key == entry.Key);
             await AppCatalog.DownloadAsync(entry, new Progress<AppDownloadProgress>(p => Show(p.Percent)), CancellationToken.None);
-            _app.Notify($"{entry.Name} downloaded", "Find it under Apps → Installed. Click it to open.", System.Windows.Forms.ToolTipIcon.Info,
-                Tray.NotifyLogo.Durazzno, () => _app.ShowMainWindow("apps"), Tray.NotifyTone.Success);
+            _app.Notify("Durazzno Apps", update ? $"{entry.Name} just got updated." : $"{entry.Name} just got installed.",
+                System.Windows.Forms.ToolTipIcon.Info, Tray.NotifyLogo.Durazzno, () => _app.ShowMainWindow("apps"), Tray.NotifyTone.Success);
         }
         catch (Exception ex)
         {
