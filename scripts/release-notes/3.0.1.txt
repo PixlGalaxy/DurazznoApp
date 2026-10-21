@@ -1,0 +1,7 @@
+Durazzno App 3.0.1
+- Server status is now checked every 15 seconds while the window is open and every 5 minutes from the tray, instead of constantly.
+- Opening the window checks the connection right away.
+- Clicking Update from the tray checks the server first, so it never starts an update while the server is offline.
+- The Apps catalog refreshes every 5 minutes and when you open the Apps or Online tab, so new apps and versions show up on their own.
+- The Refresh button no longer blinks while the catalog reloads.
+- Included bug fixes.
