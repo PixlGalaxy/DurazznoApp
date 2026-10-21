@@ -1,5 +1,6 @@
-# Durazzno Publisher: builds, signs and uploads Durazzno App (Main) and the Apps catalog to Webin Cloud Server over SMB.
+# Durazzno Publisher: builds, signs and uploads Durazzno App (Main) and the Apps catalog through the Webin Cloud Server API.
 # Start it with Publisher.bat. Signing needs publisher\crypto\update-signing-key.xml (git-ignored, never commit).
+# Uploading needs publisher\.env with the Webin Cloud account (git-ignored; see .env.example).
 Add-Type -Name Native -Namespace Publisher -MemberDefinition @'
 [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
@@ -21,8 +22,50 @@ $catalogDir  = Join-Path $PSScriptRoot 'apps-catalog'
 $catalogPath = Join-Path $catalogDir 'apps.json'
 $distServer  = Join-Path $root 'dist\server'
 $distApps    = Join-Path $root 'dist\apps'
-$share       = '\\192.168.0.150\WebinCloud\Data\DurazznoApp'
+$envFile     = Join-Path $PSScriptRoot '.env'
 $utf8        = New-Object System.Text.UTF8Encoding $false
+
+# --- Webin Cloud Server settings ----------------------------------------------------------------
+# publisher\.env (git-ignored, copy .env.example):
+#   WEBINCLOUD_USER, WEBINCLOUD_PASSWORD   an account with write access to the two folders below
+#   WEBINCLOUD_URL                         optional; default: WebinCloud.Server in src\DurazznoApp\Network\WebinCloud.cs
+#   WEBINCLOUD_MAIN_FOLDER                 optional; server folder for the app (default DurazznoApp/Main)
+#   WEBINCLOUD_APPS_FOLDER                 optional; server folder for the catalog (default DurazznoApp/Apps)
+$webinCloudCs = Get-Content (Join-Path $root 'src\DurazznoApp\Network\WebinCloud.cs') -Raw
+function CsConstant($name) {
+    if ($webinCloudCs -notmatch "const string $name = `"([^`"]+)`"") { throw "Could not read WebinCloud.$name from WebinCloud.cs." }
+    $Matches[1]
+}
+function Read-EnvFile {
+    $values = @{}
+    if (Test-Path $envFile) {
+        foreach ($line in Get-Content $envFile -Encoding UTF8) {
+            $l = $line.Trim()
+            if (-not $l -or $l.StartsWith('#') -or -not $l.Contains('=')) { continue }
+            $key, $value = $l.Split('=', 2)
+            $values[$key.Trim()] = $value.Trim().Trim('"').Trim("'")
+        }
+    }
+    $values
+}
+function Load-Settings {
+    $script:settings = Read-EnvFile
+    $script:server = $(if ($settings.WEBINCLOUD_URL) { $settings.WEBINCLOUD_URL } else { CsConstant 'Server' }).TrimEnd('/')
+    $script:mainFolder = $(if ($settings.WEBINCLOUD_MAIN_FOLDER) { $settings.WEBINCLOUD_MAIN_FOLDER } else { 'DurazznoApp/Main' }).Trim('/')
+    $script:appsFolder = $(if ($settings.WEBINCLOUD_APPS_FOLDER) { $settings.WEBINCLOUD_APPS_FOLDER } else { 'DurazznoApp/Apps' }).Trim('/')
+}
+Load-Settings
+# Public (no sign-in) links Durazzno App reads: {server}/backend/api/public/{path name}/{file}/download
+$publicMain = CsConstant 'MainPath'
+$publicApps = CsConstant 'AppsPath'
+function Public-Link($pathName, $file) { "$server/backend/api/public/$pathName/$([Uri]::EscapeDataString($file))/download?inline=1&path=" }
+
+Add-Type -AssemblyName System.Net.Http
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+$http = New-Object System.Net.Http.HttpClient
+$http.Timeout = [TimeSpan]::FromMinutes(10)
+$http.DefaultRequestHeaders.UserAgent.ParseAdd('DurazznoPublisher/2.0')
+$script:token = $null
 
 # --- Size ---------------------------------------------------------------------------------------
 # Layout numbers below are in "units": 1 unit = 1 px at 100 % display scale, times 1.2 so it reads comfortably,
@@ -275,66 +318,245 @@ function Set-Busy($busy) {
     $form.UseWaitCursor = $busy
 }
 
-# --- Upload (SMB) -------------------------------------------------------------------------------
-function Assert-Share {
-    Set-Status "Connecting to $share..." $cAccent
-    if (-not (Test-Path -LiteralPath $share)) { throw "Cannot reach $share. Is the server on and the PC on the LAN?" }
-}
+# --- Upload (Webin Cloud Server API) ------------------------------------------------------------
+# Signs in with the account in publisher\.env (a "device" in Webin Cloud, signed out again when the upload ends) and
+# sends each file as an upload session: 1 MiB chunks over several WebSockets at once (HTTP PUT if sockets can't
+# open). The server writes into a hidden .part file and renames it over the old file only when every chunk is in, so
+# clients never see a half-written file. Order matters: binaries first, the manifest / catalog last.
 function Format-MB($bytes) { '{0:N1} MB' -f ($bytes / 1MB) }
 
-# name.ext -> name_new.ext, next to it.
-function Get-StagedPath($target) {
-    $leaf = Split-Path $target -Leaf
-    Join-Path (Split-Path $target -Parent) ([IO.Path]::GetFileNameWithoutExtension($leaf) + '_new' + [IO.Path]::GetExtension($leaf))
+# Waits for a .NET task without freezing the window.
+function Wait-Task($task) {
+    while (-not $task.Wait(40)) { [Windows.Forms.Application]::DoEvents() }
+    if ($task.GetType().IsGenericType) { $task.Result }
 }
 
-function Copy-WithProgress($source, $target) {
-    $name = Split-Path $source -Leaf
-    $in = [IO.File]::OpenRead($source)
-    $out = [IO.File]::Create($target)
+function Invoke-Api($method, $path, $body = $null) {
+    $request = New-Object System.Net.Http.HttpRequestMessage ([System.Net.Http.HttpMethod]::new($method)), "$server/backend/api/$path"
+    if ($script:token) { $request.Headers.Authorization = New-Object System.Net.Http.Headers.AuthenticationHeaderValue 'Bearer', $script:token }
+    if ($null -ne $body) {
+        $request.Content = New-Object System.Net.Http.StringContent ((ConvertTo-Json $body -Compress), [Text.Encoding]::UTF8, 'application/json')
+    }
     try {
-        $buffer = New-Object byte[] (2MB)
-        while (($read = $in.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            $out.Write($buffer, 0, $read)
-            $script:sent += $read
-            $fraction = $script:sent / [Math]::Max(1, $script:total)
-            Set-Progress $fraction
-            Set-Status ("Uploading {0}   {1:N0} %   ({2} of {3})" -f $name, ($fraction * 100), (Format-MB $script:sent), (Format-MB $script:total)) $cAccent
+        $response = Wait-Task ($http.SendAsync($request))
+    } catch {
+        throw "Can't reach Webin Cloud Server at $server. $($_.Exception.InnerException.Message)"
+    }
+    $text = Wait-Task ($response.Content.ReadAsStringAsync())
+    if (-not $response.IsSuccessStatusCode) {
+        $message = try { ($text | ConvertFrom-Json).error } catch { $null }
+        $script:lastStatus = [int]$response.StatusCode
+        throw "Webin Cloud Server answered $([int]$response.StatusCode): $(if ($message) { $message } else { $response.ReasonPhrase })"
+    }
+    if ($text) { try { $text | ConvertFrom-Json } catch { $text } }
+}
+
+function Connect-WebinCloud {
+    Load-Settings # picks up edits to .env without restarting the Publisher
+    if (-not (Test-Path $envFile)) { throw "Missing publisher\.env. Copy publisher\.env.example to publisher\.env and fill in the Webin Cloud user and password." }
+    if (-not $settings.WEBINCLOUD_USER -or -not $settings.WEBINCLOUD_PASSWORD) { throw 'publisher\.env needs WEBINCLOUD_USER and WEBINCLOUD_PASSWORD.' }
+    Set-Status "Signing in to $server..." $cAccent
+    $script:token = $null
+    try {
+        $login = Invoke-Api 'POST' 'devices/login' @{
+            usernameOrEmail = $settings.WEBINCLOUD_USER
+            password        = $settings.WEBINCLOUD_PASSWORD
+            deviceName      = "Durazzno Publisher ($env:COMPUTERNAME)"
+            platform        = 'windows'
         }
-    } finally { $in.Dispose(); $out.Dispose() }
+    } catch {
+        if ($script:lastStatus -eq 401) { throw 'Wrong user or password in publisher\.env.' }
+        if ($script:lastStatus -eq 403) { throw 'That account still has the default password. Change it in the Webin Cloud web interface first.' }
+        throw
+    }
+    $script:token = $login.accessToken
 }
 
-# Uploads files without ever leaving a half-written file under its real name: each one goes up as name_new.ext and
-# is checked; only when all of them made it are the old files deleted and the new ones renamed, in the given order.
-# On failure the _new files are removed and the server keeps the old ones.
-function Send-Files($pairs) {
-    $script:total = ($pairs | ForEach-Object { (Get-Item -LiteralPath $_.Source).Length } | Measure-Object -Sum).Sum
-    $script:sent = 0
-    $staged = New-Object System.Collections.ArrayList
-    Set-Busy $true
-    try {
+# Signs the Publisher's device out again, so it does not pile up in the account's device list.
+function Disconnect-WebinCloud {
+    if (-not $script:token) { return }
+    try { Invoke-Api 'DELETE' 'devices/current' | Out-Null } catch { }
+    $script:token = $null
+}
+
+function Read-Chunk($stream, $index, $chunkSize, $size) {
+    $start = [long]$index * $chunkSize
+    $length = [int][Math]::Min($chunkSize, $size - $start)
+    $buffer = New-Object byte[] $length
+    $stream.Position = $start
+    $read = 0
+    while ($read -lt $length) {
+        $n = $stream.Read($buffer, $read, $length - $read)
+        if ($n -le 0) { throw 'The file got shorter while uploading.' }
+        $read += $n
+    }
+    , $buffer
+}
+
+function Report-Upload($name) {
+    $fraction = $script:sent / [Math]::Max(1, $script:total)
+    Set-Progress $fraction
+    Set-Status ("Uploading {0}   {1:N0} %   ({2} of {3})" -f $name, ($fraction * 100), (Format-MB $script:sent), (Format-MB $script:total)) $cAccent
+}
+
+# Chunks over upload sockets: one chunk in flight per socket, a chunk the server could not take (409 / 429 / 5xx)
+# goes again. Returns $false when no socket can be opened (the caller falls back to HTTP).
+function Send-OverSockets($source, $id, $chunkSize, $count, $size, $name) {
+    $uri = New-Object Uri (($server -replace '^http', 'ws') + '/backend/api/uploads/socket')
+    $hex = $id -replace '-', ''
+    $idBytes = [byte[]](0..15 | ForEach-Object { [Convert]::ToByte($hex.Substring($_ * 2, 2), 16) })
+    $none = [Threading.CancellationToken]::None
+    $sockets = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt [Math]::Min(16, $count); $i++) {
+        $ws = New-Object System.Net.WebSockets.ClientWebSocket
+        $ws.Options.SetRequestHeader('Authorization', "Bearer $script:token")
         try {
-            foreach ($p in $pairs) {
-                $dir = Split-Path $p.Target -Parent
-                if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
-                $new = Get-StagedPath $p.Target
-                [void]$staged.Add(@{ New = $new; Target = $p.Target })
-                Copy-WithProgress $p.Source $new
-                Set-Status "Checking $(Split-Path $p.Target -Leaf)..." $cAccent
-                if ((Get-FileHash -LiteralPath $p.Source).Hash -ne (Get-FileHash -LiteralPath $new).Hash) {
-                    throw "$(Split-Path $p.Target -Leaf) arrived damaged (hash mismatch). Nothing was replaced."
-                }
-            }
+            Wait-Task ($ws.ConnectAsync($uri, $none))
+            [void]$sockets.Add(@{ Ws = $ws; Index = -1; Length = 0; Send = $null; Receive = $null; Buffer = (New-Object byte[] 8192) })
         } catch {
-            foreach ($s in $staged) { Remove-Item -LiteralPath $s.New -Force -ErrorAction SilentlyContinue }
-            throw
+            $ws.Dispose()
+            if ($sockets.Count -eq 0) { return $false }
+            break
         }
-        Set-Status 'Replacing the old files...' $cAccent
-        foreach ($s in $staged) {
-            if (Test-Path -LiteralPath $s.Target) { Remove-Item -LiteralPath $s.Target -Force }
-            Rename-Item -LiteralPath $s.New -NewName (Split-Path $s.Target -Leaf)
+    }
+
+    $queue = New-Object 'System.Collections.Generic.Queue[int]'
+    for ($i = 0; $i -lt $count; $i++) { $queue.Enqueue($i) }
+    $tries = @{}
+    $done = 0
+    $stream = [IO.File]::OpenRead($source)
+    try {
+        while ($done -lt $count) {
+            foreach ($s in $sockets) {
+                if ($s.Index -ge 0 -or $queue.Count -eq 0) { continue }
+                $index = $queue.Dequeue()
+                $data = Read-Chunk $stream $index $chunkSize $size
+                # Message: session id (16 bytes), chunk index (4 bytes, big-endian), chunk bytes.
+                $message = New-Object byte[] (20 + $data.Length)
+                [Array]::Copy($idBytes, 0, $message, 0, 16)
+                $message[16] = [byte](($index -shr 24) -band 0xFF); $message[17] = [byte](($index -shr 16) -band 0xFF)
+                $message[18] = [byte](($index -shr 8) -band 0xFF); $message[19] = [byte]($index -band 0xFF)
+                [Array]::Copy($data, 0, $message, 20, $data.Length)
+                $s.Index = $index
+                $s.Length = $data.Length
+                $s.Send = $s.Ws.SendAsync([ArraySegment[byte]]::new($message), [System.Net.WebSockets.WebSocketMessageType]::Binary, $true, $none)
+                $s.Receive = $s.Ws.ReceiveAsync([ArraySegment[byte]]::new($s.Buffer), $none)
+            }
+
+            $busy = @($sockets | Where-Object { $_.Index -ge 0 })
+            if ($busy.Count -eq 0) { throw 'Every upload connection closed.' }
+            [void][Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($busy | ForEach-Object { $_.Receive }), 40)
+            [Windows.Forms.Application]::DoEvents()
+
+            foreach ($s in $busy) {
+                if (-not $s.Receive.IsCompleted) { continue }
+                $index = $s.Index
+                $s.Index = -1
+                if ($s.Receive.IsFaulted -or $s.Receive.IsCanceled -or ($s.Send -and $s.Send.IsFaulted) -or $s.Receive.Result.MessageType -eq 'Close') {
+                    # The connection dropped: that chunk goes again on another one.
+                    $queue.Enqueue($index)
+                    $sockets.Remove($s)
+                    try { $s.Ws.Dispose() } catch { }
+                    if ($sockets.Count -eq 0) { throw 'The upload connections to Webin Cloud Server dropped.' }
+                    continue
+                }
+                $reply = [Text.Encoding]::UTF8.GetString($s.Buffer, 0, $s.Receive.Result.Count) | ConvertFrom-Json
+                if ($reply.ok) {
+                    $done++
+                    $script:sent += $s.Length
+                    Report-Upload $name
+                    continue
+                }
+                $status = [int]$reply.status
+                $tries[$index] = 1 + [int]$tries[$index]
+                if (($status -in 409, 429 -or $status -ge 500) -and $tries[$index] -le 5) {
+                    Start-Sleep -Milliseconds (200 * $tries[$index])
+                    $queue.Enqueue($index)
+                    continue
+                }
+                throw "Webin Cloud Server refused part $index of $($name): $($reply.error)"
+            }
         }
     } finally {
+        $stream.Dispose()
+        foreach ($s in $sockets) {
+            try { [void]$s.Ws.CloseOutputAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, 'done', $none).Wait(2000) } catch { }
+            try { $s.Ws.Dispose() } catch { }
+        }
+    }
+    $true
+}
+
+# The same chunks with HTTP PUT, six at a time (for proxies without WebSocket support).
+function Send-OverHttp($source, $id, $chunkSize, $count, $size, $name) {
+    $queue = New-Object 'System.Collections.Generic.Queue[int]'
+    for ($i = 0; $i -lt $count; $i++) { $queue.Enqueue($i) }
+    $running = @{}
+    $tries = @{}
+    $done = 0
+    $stream = [IO.File]::OpenRead($source)
+    try {
+        while ($done -lt $count) {
+            while ($running.Count -lt 6 -and $queue.Count -gt 0) {
+                $index = $queue.Dequeue()
+                $data = Read-Chunk $stream $index $chunkSize $size
+                $request = New-Object System.Net.Http.HttpRequestMessage ([System.Net.Http.HttpMethod]::Put), "$server/backend/api/files/upload/sessions/$id/chunks/$index"
+                $request.Headers.Authorization = New-Object System.Net.Http.Headers.AuthenticationHeaderValue 'Bearer', $script:token
+                $request.Content = New-Object System.Net.Http.ByteArrayContent (, $data)
+                $request.Content.Headers.ContentType = 'application/octet-stream'
+                $running[$index] = @{ Task = $http.SendAsync($request); Length = $data.Length }
+            }
+            [void][Threading.Tasks.Task]::WaitAny([Threading.Tasks.Task[]]@($running.Values | ForEach-Object { $_.Task }), 40)
+            [Windows.Forms.Application]::DoEvents()
+            foreach ($index in @($running.Keys)) {
+                $job = $running[$index]
+                if (-not $job.Task.IsCompleted) { continue }
+                $running.Remove($index)
+                $ok = -not $job.Task.IsFaulted -and $job.Task.Result.IsSuccessStatusCode
+                if ($ok) { $done++; $script:sent += $job.Length; Report-Upload $name; continue }
+                $tries[$index] = 1 + [int]$tries[$index]
+                if ($tries[$index] -gt 5) { throw "Part $index of $name could not be uploaded." }
+                Start-Sleep -Milliseconds (200 * $tries[$index])
+                $queue.Enqueue($index)
+            }
+        }
+    } finally { $stream.Dispose() }
+}
+
+# One file into a server folder, replacing what is there; then checks the size the server lists.
+function Send-File($source, $folder) {
+    $name = Split-Path $source -Leaf
+    $size = (Get-Item -LiteralPath $source).Length
+    Report-Upload $name
+    $session = Invoke-Api 'POST' 'files/upload/sessions' @{ path = $folder; name = $name; size = $size; onConflict = 'overwrite'; transport = 'socket' }
+    $chunkSize = [long]$session.chunkSize
+    $count = [int][Math]::Ceiling($size / $chunkSize)
+    try {
+        if (-not (Send-OverSockets $source $session.id $chunkSize $count $size $name)) {
+            Send-OverHttp $source $session.id $chunkSize $count $size $name
+        }
+        Set-Status "Finishing $name..." $cAccent
+        Invoke-Api 'POST' "files/upload/sessions/$($session.id)/complete" | Out-Null
+    } catch {
+        try { Invoke-Api 'DELETE' "files/upload/sessions/$($session.id)" | Out-Null } catch { }
+        throw
+    }
+    $listing = Invoke-Api 'GET' "files?path=$([Uri]::EscapeDataString($folder))"
+    $entry = @($listing.entries) | Where-Object { $_.name -eq $name } | Select-Object -First 1
+    if (-not $entry) { throw "$name is not in $folder after the upload." }
+    if ($null -ne $entry.size -and [long]$entry.size -ne $size) { throw "$name arrived with the wrong size ($($entry.size) of $size bytes)." }
+}
+
+# Signs in, uploads every { Source; Folder } in order, and signs out.
+function Send-Files($items) {
+    $script:total = ($items | ForEach-Object { (Get-Item -LiteralPath $_.Source).Length } | Measure-Object -Sum).Sum
+    $script:sent = 0
+    Set-Busy $true
+    try {
+        Connect-WebinCloud
+        foreach ($item in $items) { Send-File $item.Source $item.Folder }
+    } finally {
+        Disconnect-WebinCloud
         Set-Progress $null
         Set-Busy $false
     }
@@ -345,37 +567,46 @@ function Upload-Main {
         (Join-Path $distServer 'DurazznoApp.exe'),
         (Join-Path $distServer 'manifest.json.sig'), (Join-Path $distServer 'manifest.json')) # manifest last
     foreach ($f in $files) { if (-not (Test-Path $f)) { throw "Missing $f. Build first." } }
-    Assert-Share
-    Send-Files @($files | ForEach-Object { @{ Source = $_; Target = Join-Path "$share\Main" (Split-Path $_ -Leaf) } })
+    Send-Files @($files | ForEach-Object { @{ Source = $_; Folder = $mainFolder } })
 }
 function Upload-Apps {
     $catalog = Join-Path $distApps 'apps.json'
     if (-not (Test-Path $catalog)) { throw "Missing $catalog. Build first." }
-    Assert-Share
-    # App files first (same relative paths), then the signature and the catalog itself.
-    $pairs = @(Get-ChildItem $distApps -Recurse -File | Where-Object { $_.Name -notin 'apps.json', 'apps.json.sig' } | ForEach-Object {
-        @{ Source = $_.FullName; Target = Join-Path "$share\Apps" $_.FullName.Substring($distApps.Length + 1) }
+    # App files first (same relative folders), then the signature and the catalog itself.
+    $items = @(Get-ChildItem $distApps -Recurse -File | Where-Object { $_.Name -notin 'apps.json', 'apps.json.sig' } | ForEach-Object {
+        $relative = Split-Path $_.FullName.Substring($distApps.Length + 1) -Parent
+        @{ Source = $_.FullName; Folder = $(if ($relative) { "$appsFolder/$($relative.Replace('\', '/'))" } else { $appsFolder }) }
     })
-    $pairs += @{ Source = "$catalog.sig"; Target = "$share\Apps\apps.json.sig" }
-    $pairs += @{ Source = $catalog; Target = "$share\Apps\apps.json" }
-    Send-Files $pairs
+    $items += @{ Source = "$catalog.sig"; Folder = $appsFolder }
+    $items += @{ Source = $catalog; Folder = $appsFolder }
+    Send-Files $items
 }
 
 # --- Status -------------------------------------------------------------------------------------
 function Read-Version($manifestPath) {
     try { (Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json).app.version } catch { $null }
 }
+# What Durazzno App sees: the public manifest and catalog (no sign-in needed).
+function Read-Public($pathName, $file) {
+    try {
+        $response = Wait-Task ($http.GetAsync((Public-Link $pathName $file)))
+        if (-not $response.IsSuccessStatusCode) { return @{ Online = $true; Json = $null } }
+        @{ Online = $true; Json = (Wait-Task ($response.Content.ReadAsStringAsync())) | ConvertFrom-Json }
+    } catch {
+        @{ Online = $false; Json = $null }
+    }
+}
 function Refresh-Main {
     $built = Read-Version (Join-Path $distServer 'manifest.json')
     $builtLabel.Text = 'Built: ' + $(if ($built) { $built } else { 'nothing yet' })
-    Set-Status "Reading the server..." $cAccent
-    $online = Test-Path -LiteralPath $share
-    $server = if ($online) { Read-Version "$share\Main\manifest.json" }
-    $serverLabel.Text = 'Server: ' + $(if (-not $online) { 'unreachable' } elseif ($server) { $server } else { 'nothing yet' })
-    $serverLabel.ForeColor = $(if ($online) { $cText } else { $cBad })
-    $appsServer = if ($online) { try { @((Get-Content "$share\Apps\apps.json" -Raw -Encoding UTF8 | ConvertFrom-Json).apps).Count } catch { $null } }
-    $appsServerLabel.Text = $(if ($null -ne $appsServer) { "$appsServer app(s) on the server" } else { '' })
-    Set-Status $(if ($online) { 'Ready.' } else { "Cannot reach $share." }) $(if ($online) { $cDim } else { $cBad })
+    Set-Status "Reading $server..." $cAccent
+    $main = Read-Public $publicMain 'manifest.json'
+    $serverLabel.Text = 'Server: ' + $(if (-not $main.Online) { 'unreachable' } elseif ($main.Json) { $main.Json.app.version } else { 'nothing yet' })
+    $serverLabel.ForeColor = $(if ($main.Online) { $cText } else { $cBad })
+    $apps = if ($main.Online) { Read-Public $publicApps 'apps.json' }
+    $appsServerLabel.Text = $(if ($apps.Json) { "$(@($apps.Json.apps).Count) app(s) on the server" } else { '' })
+    $setup = if (-not (Test-Path $envFile)) { '  ·  publisher\.env missing (needed to upload)' } else { '' }
+    Set-Status $(if ($main.Online) { "Ready.$setup" } else { "Cannot reach $server.$setup" }) $(if ($main.Online -and -not $setup) { $cDim } elseif ($main.Online) { $cAccent } else { $cBad })
 }
 function Notes-Path { Join-Path $scripts "release-notes\$($versionBox.Text.Trim()).txt" }
 function Load-Notes {

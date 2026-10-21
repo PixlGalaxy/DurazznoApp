@@ -11,6 +11,8 @@ obj/
 
 # Update signing key (private): never commit
 /publisher/crypto/
+# Webin Cloud account for uploading (user and password): never commit
+/publisher/.env
 
 # Local notes: never commit
 /TODO.md
