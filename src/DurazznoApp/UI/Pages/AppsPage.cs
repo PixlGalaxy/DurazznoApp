@@ -66,8 +66,9 @@ internal sealed class AppsPage : UserControl
 
         Content = Ui.Stack(header, tabsRow, _body);
 
-        // The catalog is never cached: it is fetched every time the page opens and every 10 s while it is shown, so
-        // when the server goes away the online apps disappear (and cannot be installed) until it is back.
+        // The catalog is never cached: it is fetched when the page opens, when the Online tab opens, on REFRESH and every
+        // 5 minutes while the page is shown, so when the server goes away the online apps disappear (and cannot be
+        // installed) until it is back.
         _poll.Tick += async (_, _) => await LoadOnlineAsync(quiet: true);
         IsVisibleChanged += async (_, _) =>
         {
@@ -86,7 +87,7 @@ internal sealed class AppsPage : UserControl
         Render();
     }
 
-    private readonly System.Windows.Threading.DispatcherTimer _poll = new() { Interval = TimeSpan.FromSeconds(10) };
+    private readonly System.Windows.Threading.DispatcherTimer _poll = new() { Interval = TimeSpan.FromMinutes(5) };
     private string? _catalogStamp;
 
     /// <summary>Fetches the catalog. quiet: the 10-second refresh (no "Loading…", re-renders only when something changed).</summary>
@@ -95,7 +96,8 @@ internal sealed class AppsPage : UserControl
         if (_loading)
             return;
         _loading = true;
-        _refresh.IsEnabled = false;
+        if (!quiet)
+            _refresh.IsEnabled = false; // the background refresh leaves the button alone (no blink every few seconds)
         if (!quiet && _online is null)
             Render(); // Online shows "Loading apps" until the list arrives
         var before = (_catalogStamp, _error);
@@ -139,7 +141,14 @@ internal sealed class AppsPage : UserControl
         {
             var b = new RadioButton { Content = count is null ? label : $"{label}  {count}", GroupName = "apps-tab", Style = Ui.Res<Style>("Segment"), IsChecked = _showOnline == online };
             System.Windows.Automation.AutomationProperties.SetName(b, label);
-            b.Checked += (_, _) => { _showOnline = online; _details = null; Render(); };
+            b.Checked += (_, _) =>
+            {
+                _showOnline = online;
+                _details = null;
+                Render();
+                if (online)
+                    _ = LoadOnlineAsync(quiet: _online is not null); // fresh list each time Online opens
+            };
             _tabs.Children.Add(b);
         }
         Tab("Installed", false, _installed.Count);
