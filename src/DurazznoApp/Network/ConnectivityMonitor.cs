@@ -14,18 +14,22 @@ internal enum ConnectionState
 }
 
 /// <summary>
-/// Keeps track of Webin Cloud Server without loading it: a HEAD "ping" every 10 seconds keeps the status dot live,
-/// while the full (signed) manifest is read only on start, every 15 minutes, when the server comes back, on a network
-/// change and when the user asks. Must be created on the UI thread; <see cref="Changed"/> is raised there.
+/// Keeps track of Webin Cloud Server without loading it: a HEAD to its health endpoint keeps the status dot live (every
+/// 15 seconds while the window is open, every 5 minutes in the tray), while the full (signed) manifest is read only on
+/// start, every 15 minutes, when the server comes back, on a network change, when the window opens and when the user
+/// asks. Network changes (Wi-Fi drops, cable plugged in) are picked up right away, whatever the interval. Must be
+/// created on the UI thread; <see cref="Changed"/> is raised there.
 /// </summary>
 internal sealed class ConnectivityMonitor : IDisposable
 {
-    private static readonly TimeSpan PingInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan WindowPingInterval = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan TrayPingInterval = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ManifestInterval = TimeSpan.FromMinutes(15);
 
     private readonly Func<Uri> _manifestUri;
     private readonly SynchronizationContext _ui;
-    private readonly DispatcherTimer _ping = new() { Interval = PingInterval };
+    private readonly DispatcherTimer _ping = new() { Interval = TrayPingInterval };
+    private bool _windowOpen;
     private readonly DispatcherTimer _networkDebounce = new() { Interval = TimeSpan.FromSeconds(3) };
     private Task? _running;
     private DateTime _lastManifest = DateTime.MinValue;
@@ -62,6 +66,22 @@ internal sealed class ConnectivityMonitor : IDisposable
     /// <summary>Reads the manifest now, or joins the read already in progress.</summary>
     public Task RefreshAsync() => _running is { IsCompleted: false } ? _running : _running = CheckAsync();
 
+    /// <summary>
+    /// The window was shown or hidden (minimized counts as hidden). Opening it checks the connection right away and
+    /// re-reads the manifest when it is older than a minute, then pings every 15 seconds; in the tray every 5 minutes.
+    /// </summary>
+    public void SetWindowOpen(bool open)
+    {
+        if (open == _windowOpen)
+            return;
+        _windowOpen = open;
+        _ping.Interval = open ? WindowPingInterval : TrayPingInterval;
+        _ping.Stop();
+        _ping.Start();
+        if (open)
+            _ = DateTime.Now - _lastManifest > TimeSpan.FromMinutes(1) ? RefreshAsync() : PingAsync();
+    }
+
     private async Task PingAsync()
     {
         if (_pinging || _running is { IsCompleted: false })
@@ -76,7 +96,7 @@ internal sealed class ConnectivityMonitor : IDisposable
             }
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var reachable = await ServerClient.PingAsync(_manifestUri(), cts.Token);
+            var reachable = await ServerClient.PingAsync(WebinCloud.HealthUri(_manifestUri()), cts.Token);
             // Server answers but the manifest was missing or invalid last time: retry that at most once a minute.
             if (reachable && State != ConnectionState.Online && DateTime.Now - _lastManifest < TimeSpan.FromMinutes(1) && LastError is not null
                 && !LastError.Contains("Connection", StringComparison.OrdinalIgnoreCase))

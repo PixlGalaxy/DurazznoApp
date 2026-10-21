@@ -155,7 +155,17 @@ internal sealed class AppController : IDisposable
     /// </summary>
     public async Task InstallUpdateAsync()
     {
+        if (IsInstalling)
+            return;
+        // Check the server first: the update on offer may be stale (tray menu built minutes ago) or it may be offline.
+        await Connection.RefreshAsync();
         var manifest = Connection.Manifest;
+        if (manifest is null)
+        {
+            Notify("Durazzno App Update", "Can't reach Webin Cloud Server right now. Try again when you're online.", ToolTipIcon.Warning,
+                NotifyLogo.WebinCloud, tone: NotifyTone.Warning);
+            return;
+        }
         if (manifest is not { IsAppNewer: true } || IsInstalling)
             return;
 
@@ -314,7 +324,15 @@ internal sealed class AppController : IDisposable
     private MainWindow CreateWindow()
     {
         var window = new MainWindow(this);
-        window.Closed += (_, _) => _window = null;
+        // Open window: connection checked now and every 15 s; hidden or minimized (tray): every 5 minutes.
+        void Track() => Connection.SetWindowOpen(window.IsVisible && window.WindowState != System.Windows.WindowState.Minimized);
+        window.IsVisibleChanged += (_, _) => Track();
+        window.StateChanged += (_, _) => Track();
+        window.Closed += (_, _) =>
+        {
+            _window = null;
+            Connection.SetWindowOpen(false);
+        };
         return window;
     }
 

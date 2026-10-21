@@ -99,7 +99,7 @@ internal static class ServerClient
     }
 
     /// <summary>
-    /// Cheap reachability check for the status dot (every few seconds): a HEAD request, no body. Any HTTP answer
+    /// Cheap reachability check for the status dot (WebinCloud.HealthUri): a HEAD request, no body. Any HTTP answer
     /// below 500 means the server is up; the full manifest is fetched far less often.
     /// </summary>
     public static async Task<bool> PingAsync(Uri uri, CancellationToken ct)

@@ -44,6 +44,12 @@ internal static class WebinCloud
         return new Uri(source, fileName);
     }
 
+    /// <summary>
+    /// Webin Cloud Server's health endpoint on the manifest's server ({server}/backend/api/health): the cheap "is it up"
+    /// check, which stays out of the public file logs. A local manifest file is its own check.
+    /// </summary>
+    public static Uri HealthUri(Uri manifest) => manifest.IsFile ? manifest : new Uri(manifest, "/backend/api/health");
+
     /// <summary>The signature next to a file: manifest.json → manifest.json.sig.</summary>
     public static Uri SignatureOf(Uri file)
     {
